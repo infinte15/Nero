@@ -1,0 +1,53 @@
+# ===========================================================================
+# Nero - Brain
+#
+# Kein "ports:"-Eintrag und kein eigener Tunnel-Hostname: in Phase 1 spricht nur
+# der Server selbst mit Nero (curl auf localhost via "docker compose exec").
+# Die Subdomain kommt erst, wenn in Phase 3 Clients von aussen sprechen.
+#
+# Werte kommen aus .env neben dieser Datei (Vorlage: .env.example).
+#   docker compose up -d --build
+# ===========================================================================
+
+services:
+
+  nero-brain:
+    build: .
+    restart: unless-stopped
+    environment:
+      # Direkt an den Backend-Container, im internen Docker-Netz.
+      #
+      # Bewusst NICHT ueber https://${APP_DOMAIN}/api: vor der Domain sitzt eine
+      # Cloudflare-Access-Policy mit "Require: Gateway" (DEPLOYMENT.md §6). Ein
+      # Maschinen-Client braeuchte dort zusaetzlich ein Access-Service-Token -
+      # und der Umweg ueber die Kante waere ohnehin sinnlos, wenn beide
+      # Container nebeneinander laufen.
+      APP_API_URL: http://backend:8080
+      NERO_APP_TOKEN: ${NERO_APP_TOKEN}
+      NERO_LLM_PROVIDER: ${NERO_LLM_PROVIDER:-groq}
+      NERO_LLM_MODEL: ${NERO_LLM_MODEL:-openai/gpt-oss-20b}
+      GROQ_API_KEY: ${GROQ_API_KEY}
+      DAILY_LIMIT_EUR: ${DAILY_LIMIT_EUR:-0.50}
+      TZ: Europe/Berlin
+    volumes:
+      - nero_data:/data
+    networks:
+      - everything-app
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  # Von der Everything-App-Compose-Datei angelegt (Projektname "Everything-app").
+  # Laeuft der Stack unter einem anderen Verzeichnisnamen, hier den Namen aus
+  # "docker network ls" eintragen.
+  everything-app:
+    external: true
+    name: everything-app_default
+
+volumes:
+  nero_data:
