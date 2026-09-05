@@ -4,4 +4,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .env
+.env.satellite
+.env.agent
 data/

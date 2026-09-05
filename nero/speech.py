@@ -86,3 +86,19 @@ def join_de(parts: list[str]) -> str:
 
 def quote(text: str) -> str:
     return f"„{text}“"
+
+
+# Anfuehrungszeichen aller Bauarten. Im Schriftbild markieren sie ein Zitat, im
+# gesprochenen Satz haben sie keine Funktion - je nach Stimme liest espeak-ng sie
+# als Pause oder verschluckt sie.
+_QUOTES = str.maketrans({c: None for c in "„“”\"«»‚‘’"})
+
+
+def normalize_for_speech(text: str) -> str:
+    """Letzter Schliff, bevor der Satz an die Sprachausgabe geht.
+
+    Bewusst nur Anfuehrungszeichen und Whitespace: Zahlen, Uhrzeiten (``9:30
+    Uhr``) und Datumsangaben spricht das deutsche espeak-ng-Frontend von sich aus
+    richtig aus. Jede weitere Regel hier waere eine Wette gegen den Phonemizer.
+    """
+    return " ".join(text.translate(_QUOTES).split())

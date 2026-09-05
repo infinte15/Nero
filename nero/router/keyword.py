@@ -11,11 +11,13 @@ import re
 
 from nero.schemas import ToolCall
 
-# (Muster, Tool, Namen der Gruppen in Reihenfolge). Der Text ist beim Abgleich
+# (Muster, Tool, Namen der Gruppen in Reihenfolge) - optional gefolgt von einem
+# Woerterbuch fester Argumente, fuer Befehle, die einen Wert nicht nennen
+# ("Ton aus" meint Lautstaerke 0). Der Text ist beim Abgleich
 # entzerrt und von Satzzeichen am Ende befreit, aber NICHT kleingeschrieben - sonst
 # landete "Analysis-Uebungsblatt" kleingeschrieben als Aufgabentitel in der App.
 # Die Muster greifen ueber re.IGNORECASE.
-PATTERNS: list[tuple[str, str, tuple[str, ...]]] = [
+PATTERNS: list[tuple] = [
     # --- lokal, ohne API ---
     (r"^wie (?:spät|viel uhr)(?: ist es)?$", "system.time", ()),
     (r"^(?:wie viel uhr haben wir|sag mir die uhrzeit)$", "system.time", ()),
@@ -41,6 +43,19 @@ PATTERNS: list[tuple[str, str, tuple[str, ...]]] = [
     (r"^was (?:muss|soll) ich heute noch machen$", "app.habits_today", ()),
     (r"^(?:ich habe|ich hab|hab|habe) (.+?) (?:gemacht|erledigt)$",
      "app.complete_habit", ("name",)),
+    # --- Geraete ---
+    (r"^sperr(?:e)?(?: (?:den|meinen|das))? (?:pc|rechner|laptop|bildschirm|computer)$",
+     "device.lock", ()),
+    (r"^bildschirm sperren$", "device.lock", ()),
+    (r"^lautst(?:ä|ae)rke auf (\d{1,3})\s*%?$", "device.volume", ("level",)),
+    # Vor dem Muster fuer "öffne/starte", damit "mach den Ton aus" hier haengen
+    # bleibt und nicht als Programmname durchgeht.
+    (r"^(?:mach(?:e)? )?(?:den )?ton (?:aus|weg|stumm)$", "device.volume", (), {"level": 0}),
+    (r"^(?:sei |sei mal )?(?:leise|still)$", "device.volume", (), {"level": 0}),
+    # Bewusst ohne "mach": "mach das Licht an" waere sonst ein Programmname.
+    # Kennt der Agent das Programm nicht, sagt er das - er hat eine Positivliste.
+    (r"^(?:öffne|starte) (?:mir )?(?:das programm |die app )?(.+)$", "device.open_app", ("app",)),
+    (r"^welche ger(?:ä|ae)te sind (?:verbunden|online)$", "device.list", ()),
     # --- Lernen ---
     (r"^wie (?:steht'?s|läuft es|lauft es) (?:mit )?(?:dem )?lernen$", "app.study_progress", ()),
     (r"^(?:mein )?lernfortschritt(?: in| für)? ?(.*)$", "app.study_progress", ("subject",)),
@@ -49,8 +64,8 @@ PATTERNS: list[tuple[str, str, tuple[str, ...]]] = [
 ]
 
 COMPILED = [
-    (re.compile(pattern, re.IGNORECASE), tool, groups)
-    for pattern, tool, groups in PATTERNS
+    (re.compile(entry[0], re.IGNORECASE), entry[1], entry[2], entry[3] if len(entry) > 3 else {})
+    for entry in PATTERNS
 ]
 
 _TRAILING_PUNCTUATION = re.compile(r"[.?!,;:\s]+$")
@@ -73,14 +88,17 @@ def keyword_route(text: str) -> ToolCall | None:
     if not normalized:
         return None
 
-    for pattern, tool, group_names in COMPILED:
+    for pattern, tool, group_names, fixed in COMPILED:
         match = pattern.match(normalized)
         if not match:
             continue
-        args = {
-            name: value.strip()
-            for name, value in zip(group_names, match.groups(), strict=True)
-            if value and value.strip()
-        }
+        args = dict(fixed)
+        args.update(
+            {
+                name: value.strip()
+                for name, value in zip(group_names, match.groups(), strict=True)
+                if value and value.strip()
+            }
+        )
         return ToolCall(tool=tool, args=args)
     return None

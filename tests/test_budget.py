@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 from datetime import date, timedelta
 
+import pytest
+
 from nero.budget import DailyBudget
 from nero.config import Settings
 
 PRICES = Settings().price_eur_per_mtok
+AUDIO_PRICES = Settings().price_eur_per_audio_hour
 
 
 def test_zaehlt_und_bremst(tmp_path):
@@ -46,3 +49,22 @@ def test_unbekanntes_modell_wird_konservativ_geschaetzt(tmp_path):
     budget.record("irgendein/neues-modell", 1_000_000, 0)
     # Teurer als gpt-oss-20b - lieber zu früh bremsen als zu spät.
     assert budget.spent_today() > PRICES("openai/gpt-oss-20b")[0]
+
+
+def test_audio_zaehlt_in_denselben_tagesbetrag(tmp_path):
+    """Whisper rechnet nach Audiostunde ab, das Sprachmodell nach Token."""
+    budget = DailyBudget(tmp_path / "usage.json", 0.5, PRICES, AUDIO_PRICES)
+    budget.record("openai/gpt-oss-20b", 100_000, 0)
+    nach_token = budget.spent_today()
+
+    budget.record_audio("whisper-large-v3-turbo", seconds=1800)
+    assert budget.spent_today() == pytest.approx(
+        nach_token + AUDIO_PRICES("whisper-large-v3-turbo") / 2
+    )
+
+
+def test_ohne_audiopreise_wird_nichts_verbucht(tmp_path):
+    """Der vierte Parameter ist optional - ein Budget ohne ihn bleibt brauchbar."""
+    budget = DailyBudget(tmp_path / "usage.json", 0.5, PRICES)
+    budget.record_audio("whisper-large-v3-turbo", seconds=3600)
+    assert budget.spent_today() == 0.0

@@ -1,0 +1,132 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nero — Spiegel</title>
+<style>
+  /* Hinter halbdurchlässigem Glas gilt eine einzige Regel: was leuchten soll,
+     muss weiß sein, alles andere schwarz. Grautöne verschwinden im Spiegel. */
+  html, body {
+    margin: 0; height: 100%; background: #000; color: #fff; overflow: hidden;
+    font-family: "Helvetica Neue", Helvetica, system-ui, sans-serif;
+    font-weight: 200; -webkit-font-smoothing: antialiased;
+  }
+  body { display: flex; flex-direction: column; padding: 5vh 6vw; gap: 4vh; cursor: none; }
+  #uhr { font-size: 16vh; line-height: .95; letter-spacing: -.02em; font-weight: 100; }
+  #datum { font-size: 3.4vh; opacity: .65; text-transform: capitalize; }
+  section { margin-top: 2vh; }
+  h2 {
+    font-size: 2vh; letter-spacing: .35em; text-transform: uppercase;
+    opacity: .4; margin: 0 0 1.2vh; font-weight: 400;
+  }
+  p { font-size: 3.6vh; line-height: 1.45; margin: 0; }
+  #fuss {
+    margin-top: auto; font-size: 1.6vh; opacity: .3;
+    display: flex; justify-content: space-between;
+  }
+  .weg { opacity: .25; }
+  #token {
+    position: fixed; inset: 0; display: none; place-items: center;
+    background: #000; cursor: auto;
+  }
+  #token.an { display: grid; }
+  #token input {
+    background: #000; color: #fff; border: 0; border-bottom: 1px solid #444;
+    font: inherit; font-size: 3vh; padding: 1vh; text-align: center; outline: none;
+  }
+</style>
+
+<div id="uhr">--:--</div>
+<div id="datum"></div>
+
+<section>
+  <h2>Heute</h2>
+  <p id="heute">…</p>
+</section>
+
+<section>
+  <h2>Als Nächstes</h2>
+  <p id="naechstes">…</p>
+</section>
+
+<div id="fuss">
+  <span id="stand"></span>
+  <span id="fehler"></span>
+</div>
+
+<div id="token"><input id="feld" type="password" placeholder="Gerätetoken" autocomplete="off"></div>
+
+<script>
+// Phase 7 aus dem Plan: „Neuer Client, gleiche Schnittstelle." Genau das —
+// diese Seite spricht ausschließlich /command, so wie die Testseite und der
+// Satellit. Am Brain musste dafür nichts geändert werden.
+const $ = (id) => document.getElementById(id);
+const KEY = "nero-token";
+let token = "";
+try { token = localStorage.getItem(KEY) || ""; } catch { /* privates Fenster */ }
+
+const TAGE = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
+const MONATE = ["Januar","Februar","März","April","Mai","Juni",
+                "Juli","August","September","Oktober","November","Dezember"];
+
+function uhr() {
+  const t = new Date();
+  $("uhr").textContent =
+    String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0");
+  $("datum").textContent =
+    `${TAGE[t.getDay()]}, ${t.getDate()}. ${MONATE[t.getMonth()]} ${t.getFullYear()}`;
+}
+
+async function frag(text) {
+  const antwort = await fetch("/command", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(token ? { Authorization: "Bearer " + token } : {}) },
+    body: JSON.stringify({ text }),
+  });
+  if (antwort.status === 401) {
+    $("token").classList.add("an");
+    $("feld").focus();
+    throw new Error("Token");
+  }
+  $("token").classList.remove("an");
+  return (await antwort.json()).speech;
+}
+
+async function aktualisieren() {
+  try {
+    const [heute, naechstes] = await Promise.all([
+      frag("was steht heute an"),
+      frag("nächster Termin"),
+    ]);
+    $("heute").textContent = heute;
+    $("naechstes").textContent = naechstes;
+    $("heute").classList.remove("weg");
+    $("naechstes").classList.remove("weg");
+    $("fehler").textContent = "";
+    $("stand").textContent = "Stand " + new Date().toLocaleTimeString("de-DE",
+      { hour: "2-digit", minute: "2-digit" });
+  } catch (err) {
+    // Der letzte bekannte Stand bleibt stehen und verblasst nur. Ein Spiegel,
+    // der bei jedem Netzhänger leer wird, ist schlechter als einer, der
+    // fünf Minuten alt ist.
+    $("heute").classList.add("weg");
+    $("naechstes").classList.add("weg");
+    $("fehler").textContent = err.message === "Token" ? "" : "keine Verbindung";
+  }
+}
+
+$("feld").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  token = $("feld").value.trim();
+  try { localStorage.setItem(KEY, token); } catch { /* nicht schlimm */ }
+  $("feld").value = "";
+  $("token").classList.remove("an");
+  aktualisieren();
+});
+
+uhr();
+setInterval(uhr, 1000);
+aktualisieren();
+setInterval(aktualisieren, 5 * 60 * 1000);
+// Nach dem Aufwachen aus dem Ruhezustand ist der Stand alt.
+document.addEventListener("visibilitychange", () => !document.hidden && aktualisieren());
+</script>

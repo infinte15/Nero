@@ -1,0 +1,218 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Nero</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #14161a; --fg: #e7e9ee; --dim: #8b93a3;
+    --line: #2a2f38; --accent: #6ea8fe; --bad: #ff8b8b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1.25rem; background: var(--bg); color: var(--fg);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; justify-content: center;
+  }
+  main { width: 100%; max-width: 34rem; }
+  h1 { font-size: 1.25rem; margin: 0 0 .25rem; letter-spacing: .02em; }
+  .sub { color: var(--dim); font-size: .875rem; margin: 0 0 1.75rem; }
+  button, input {
+    font: inherit; color: inherit; border-radius: .5rem;
+    border: 1px solid var(--line); background: #1c2028;
+  }
+  #rec {
+    width: 100%; padding: 1.1rem; font-size: 1.05rem; cursor: pointer;
+    transition: background .15s, border-color .15s;
+  }
+  #rec:hover:not(:disabled) { border-color: var(--accent); }
+  #rec[data-on="1"] { background: #3a1d20; border-color: var(--bad); }
+  #rec:disabled { opacity: .5; cursor: not-allowed; }
+  form { display: flex; gap: .5rem; margin: .75rem 0 0; }
+  #auth input { border-color: var(--bad); }
+  form input { flex: 1; min-width: 0; padding: .6rem .7rem; }
+  form button { padding: .6rem 1rem; cursor: pointer; }
+  #status { color: var(--dim); font-size: .875rem; min-height: 1.55em; margin: 1.25rem 0 0; }
+  #out { margin: .5rem 0 0; }
+  .card {
+    border: 1px solid var(--line); border-left: 2px solid var(--accent);
+    border-radius: .5rem; padding: .8rem .9rem; margin: .6rem 0 0;
+  }
+  .card.bad { border-left-color: var(--bad); }
+  .heard { color: var(--dim); font-size: .875rem; margin: 0 0 .35rem; }
+  .said { margin: 0; }
+  .meta { color: var(--dim); font-size: .75rem; margin: .5rem 0 0; font-variant: small-caps; }
+  .hint { color: var(--dim); font-size: .8rem; margin: 1.75rem 0 0; }
+  code { background: #1c2028; padding: .1rem .3rem; border-radius: .25rem; font-size: .85em; }
+</style>
+
+<main>
+  <h1>Nero</h1>
+  <p class="sub">Phase 3 — Testseite für Spracheingabe</p>
+
+  <button id="rec">Aufnahme starten</button>
+
+  <form id="auth" hidden>
+    <input id="token" type="password" placeholder="Gerätetoken" autocomplete="off">
+    <button>Merken</button>
+  </form>
+
+  <form id="typed">
+    <input id="text" placeholder="… oder tippen: was steht heute an" autocomplete="off">
+    <button>Senden</button>
+  </form>
+
+  <p id="status"></p>
+  <div id="out"></div>
+
+  <p class="hint">
+    Das Mikrofon gibt der Browser nur in einem sicheren Kontext frei: über
+    <code>https</code> oder <code>localhost</code>. Auf dem Server also per
+    <code>ssh -L 8090:localhost:8090 …</code> tunneln, nicht über die IP öffnen.
+  </p>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const setStatus = (t) => { $("status").textContent = t; };
+
+// Das Gerätetoken bleibt im Browser. Es steht nicht in der Seite, damit die
+// Seite selbst ohne Geheimnis ausgeliefert werden kann.
+const KEY = "nero-token";
+let token = "";
+try { token = localStorage.getItem(KEY) || ""; } catch { /* privates Fenster */ }
+
+const auth = () => (token ? { Authorization: "Bearer " + token } : {});
+
+function askForToken() {
+  $("auth").hidden = false;
+  $("token").focus();
+  setStatus("Dieses Brain verlangt ein Gerätetoken.");
+}
+
+$("auth").onsubmit = (e) => {
+  e.preventDefault();
+  token = $("token").value.trim();
+  try { localStorage.setItem(KEY, token); } catch { /* nicht schlimm */ }
+  $("token").value = "";
+  $("auth").hidden = true;
+  setStatus(token ? "Token gemerkt." : "");
+};
+
+let recorder = null;
+let chunks = [];
+
+$("rec").onclick = async () => {
+  if (recorder && recorder.state === "recording") {
+    recorder.stop();
+    return;
+  }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    setStatus("Kein Mikrofon: " + err.message);
+    return;
+  }
+
+  chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  recorder.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    $("rec").dataset.on = "0";
+    $("rec").textContent = "Aufnahme starten";
+    const blob = new Blob(chunks, { type: recorder.mimeType });
+    await send(blob);
+  };
+
+  recorder.start();
+  $("rec").dataset.on = "1";
+  $("rec").textContent = "Aufnahme beenden";
+  setStatus("Ich höre zu …");
+};
+
+$("typed").onsubmit = async (e) => {
+  e.preventDefault();
+  const text = $("text").value.trim();
+  if (!text) return;
+  $("text").value = "";
+  setStatus("Verarbeite …");
+  await handle(post("/command", { text }), text);
+};
+
+async function send(blob) {
+  setStatus("Erkenne …");
+  const form = new FormData();
+  // Die Endung leitet der Server aus dem MIME-Typ ab, nicht aus diesem Namen.
+  form.append("audio", blob, "befehl");
+  await handle(fetch("/listen", { method: "POST", body: form, headers: auth() }));
+}
+
+const post = (path, body) =>
+  fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...auth() },
+    body: JSON.stringify(body),
+  });
+
+async function handle(request, heard) {
+  let body;
+  try {
+    const response = await request;
+    if (response.status === 401) {
+      askForToken();
+      return;
+    }
+    body = await response.json();
+    if (!response.ok) throw new Error(body.detail || response.status);
+  } catch (err) {
+    setStatus("");
+    show({ speech: String(err.message || err) }, null, true);
+    return;
+  }
+  setStatus("");
+  show(body, heard ?? body.text);
+  speak(body.speech);
+}
+
+function show(body, heard, bad) {
+  const card = document.createElement("div");
+  card.className = "card" + (bad ? " bad" : "");
+
+  if (heard) {
+    const p = document.createElement("p");
+    p.className = "heard";
+    p.textContent = "„" + heard + "“";
+    card.append(p);
+  }
+
+  const said = document.createElement("p");
+  said.className = "said";
+  said.textContent = body.speech;
+  card.append(said);
+
+  if (body.tool || body.route) {
+    const meta = document.createElement("p");
+    meta.className = "meta";
+    meta.textContent = [body.tool, body.route].filter(Boolean).join(" · ");
+    card.append(meta);
+  }
+
+  $("out").prepend(card);
+}
+
+// Zweiter Aufruf statt vertonter Antwort: /listen und /speak bleiben so einzeln
+// testbar, und ohne Piper funktioniert die Seite trotzdem - nur eben stumm.
+async function speak(text) {
+  if (!text) return;
+  try {
+    const response = await post("/speak", { text });
+    if (!response.ok) return;   // stumm ist besser als eine zweite Fehlermeldung
+    const audio = new Audio(URL.createObjectURL(await response.blob()));
+    await audio.play();
+  } catch {
+    /* Sprachausgabe ist Beiwerk - die Antwort steht schon auf dem Schirm. */
+  }
+}
+</script>

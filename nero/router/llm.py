@@ -40,6 +40,9 @@ def build_system_prompt(now: datetime) -> str:
 async def llm_route(
     text: str, provider: IntentProvider, budget: DailyBudget, now: datetime
 ) -> ToolCall | None:
-    if not budget.allows():
+    # Seit Phase 6 bremst das Budget nur noch, wenn es keinen kostenlosen Weg
+    # gibt. Steht ein lokales Modell bereit, entscheidet der Provider selbst,
+    # wen er ueberspringt - die Antwort dauert dann laenger, kommt aber.
+    if not budget.allows() and not getattr(provider, "free", False):
         raise BudgetExceeded("Ich habe heute mein Limit erreicht.")
     return await provider.route(text, llm_schemas(), build_system_prompt(now))

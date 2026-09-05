@@ -38,6 +38,8 @@ def api(monkeypatch, tmp_path):
     monkeypatch.setenv("APP_API_URL", BASE_URL)
     monkeypatch.setenv("NERO_APP_TOKEN", "test-token")
     monkeypatch.setenv("NERO_LLM_PROVIDER", "null")
+    monkeypatch.setenv("NERO_STT_PROVIDER", "null")
+    monkeypatch.setenv("NERO_TTS_PROVIDER", "null")
     monkeypatch.setenv("USAGE_FILE", str(tmp_path / "usage.json"))
     get_settings.cache_clear()
 
@@ -51,7 +53,7 @@ def api(monkeypatch, tmp_path):
 def test_health(api):
     body = api.get("/health").json()
     assert body["status"] == "ok"
-    assert body["tools"] == 11
+    assert body["tools"] == 16
 
 
 def test_leerer_befehl_ist_ein_fehler(api):

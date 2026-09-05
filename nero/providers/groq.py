@@ -22,6 +22,8 @@ logger = logging.getLogger(__name__)
 
 class GroqProvider:
     name = "groq"
+    #: Kostet Geld - faellt beim erschoepften Tagesbudget aus.
+    free = False
 
     def __init__(
         self,
@@ -68,7 +70,7 @@ class GroqProvider:
             return None
 
         self._record_usage(body.get("usage"))
-        return _parse_tool_call(body)
+        return parse_tool_call(body)
 
     def _record_usage(self, usage: Any) -> None:
         if not isinstance(usage, dict):
@@ -80,7 +82,7 @@ class GroqProvider:
         )
 
 
-def _parse_tool_call(body: dict[str, Any]) -> ToolCall | None:
+def parse_tool_call(body: dict[str, Any]) -> ToolCall | None:
     try:
         message = body["choices"][0]["message"]
     except (KeyError, IndexError, TypeError):

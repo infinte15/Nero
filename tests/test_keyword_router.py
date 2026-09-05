@@ -53,10 +53,27 @@ def test_faellt_durch_an_stufe_zwei(text):
     assert keyword_route(text) is None
 
 
-def test_alle_gerouteten_tools_existieren():
+def test_jedes_muster_fuellt_sein_tool_vollstaendig():
+    """Fängt drei Fehler auf einmal ab.
+
+    Ein Muster, das auf ein Tool zeigt, das es nicht gibt. Eines, das ein
+    Argument setzt, das das Tool nicht kennt. Und eines, das ein Pflichtfeld
+    offen lässt - dann antwortet Nero mit "Dazu fehlt mir noch eine Angabe",
+    obwohl der Befehl vollständig war.
+    """
+    from nero.router.keyword import PATTERNS
     from nero.tools.registry import TOOLS
 
-    for _pattern, tool, _groups in __import__(
-        "nero.router.keyword", fromlist=["PATTERNS"]
-    ).PATTERNS:
-        assert tool in TOOLS, tool
+    for entry in PATTERNS:
+        pattern, name, groups = entry[0], entry[1], entry[2]
+        fixed = entry[3] if len(entry) > 3 else {}
+
+        assert name in TOOLS, name
+        tool = TOOLS[name]
+        geliefert = set(groups) | set(fixed)
+
+        unbekannt = geliefert - set(tool.params)
+        assert not unbekannt, f"{pattern}: {name} kennt {unbekannt} nicht"
+
+        pflicht = {n for n, spec in tool.params.items() if spec.required}
+        assert pflicht <= geliefert, f"{pattern}: {name} braucht noch {pflicht - geliefert}"

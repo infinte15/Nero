@@ -11,12 +11,12 @@ from typing import Any
 
 from nero.errors import ToolError
 from nero.schemas import ToolCall
-from nero.tools import agenda, habits, study, system, tasks
+from nero.tools import agenda, devices, habits, study, system, tasks
 from nero.tools.base import Tool, ToolContext
 
 TOOLS: dict[str, Tool] = {
     tool.name: tool
-    for module in (system, agenda, tasks, habits, study)
+    for module in (system, agenda, tasks, habits, study, devices)
     for tool in module.TOOLS
 }
 

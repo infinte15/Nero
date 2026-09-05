@@ -1,9 +1,15 @@
-"""Tagesbudget fuer LLM-Aufrufe.
+"""Tagesbudget fuer alles, was bei Groq Geld kostet.
 
 Zweite Verteidigungslinie neben dem Hard-Limit beim Anbieter: ein Bug in einer
-Schleife soll hier auflaufen und nicht erst auf der Rechnung. Die Bremse gilt
-ausschliesslich fuer Stufe 2 - der Keyword-Router laeuft weiter, Nero bleibt also
-auch bei erreichtem Limit fuer die haeufigen Befehle benutzbar.
+Schleife soll hier auflaufen und nicht erst auf der Rechnung.
+
+Zwei Abrechnungsarten liegen darunter: das Sprachmodell zahlt nach Token, Whisper
+nach Audiostunde. Beides laeuft in denselben Tagesbetrag.
+
+Bei erreichtem Limit bleibt der Keyword-Router benutzbar - getippte Befehle
+funktionieren also weiter. Gesprochene nicht: ohne Transkription gibt es keinen
+Text, auf den der Keyword-Router angewendet werden koennte. Dagegen hilft erst
+der lokale Fallback aus Phase 6.
 """
 
 from __future__ import annotations
@@ -17,10 +23,17 @@ logger = logging.getLogger(__name__)
 
 
 class DailyBudget:
-    def __init__(self, path: Path, limit_eur: float, prices_eur_per_mtok) -> None:
+    def __init__(
+        self,
+        path: Path,
+        limit_eur: float,
+        prices_eur_per_mtok,
+        price_eur_per_audio_hour=None,
+    ) -> None:
         self._path = path
         self._limit = limit_eur
         self._prices = prices_eur_per_mtok
+        self._audio_price = price_eur_per_audio_hour
         self._day, self._spent = self._load()
 
     # ---- oeffentlich ----
@@ -39,6 +52,14 @@ class DailyBudget:
         self._spent += (
             prompt_tokens * prompt_price + completion_tokens * completion_price
         ) / 1_000_000
+        self._save()
+
+    def record_audio(self, model: str, seconds: float) -> None:
+        """Whisper rechnet nach Audiostunde ab, nicht nach Token."""
+        if self._audio_price is None:
+            return
+        self._roll_over()
+        self._spent += (seconds / 3600.0) * self._audio_price(model)
         self._save()
 
     # ---- intern ----

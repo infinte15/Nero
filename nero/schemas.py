@@ -31,3 +31,17 @@ class CommandResponse(BaseModel):
     route: Route = "none"
     needs_confirmation: bool = False
     confirm_token: str | None = None
+
+
+class SpeakRequest(BaseModel):
+    text: str = Field(max_length=1000)
+
+
+class ListenResponse(CommandResponse):
+    """Wie CommandResponse, plus das, was Whisper verstanden hat.
+
+    Das Feld ist kein Luxus: bei einer falsch erkannten Aufnahme ist es der
+    einzige Hinweis darauf, dass nicht der Router danebenlag, sondern das Ohr.
+    """
+
+    text: str = ""

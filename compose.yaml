@@ -1,9 +1,9 @@
 # ===========================================================================
 # Nero - Brain
 #
-# Kein "ports:"-Eintrag und kein eigener Tunnel-Hostname: in Phase 1 spricht nur
-# der Server selbst mit Nero (curl auf localhost via "docker compose exec").
-# Die Subdomain kommt erst, wenn in Phase 3 Clients von aussen sprechen.
+# Seit Phase 4 ist Port 8090 offen: der Satellit spricht von einem anderen
+# Rechner aus mit dem Brain. Die Schranke davor sind NERO_CLIENT_TOKENS - je
+# Geraet eines. Ohne Tokens darf jeder, der den Port erreicht, alles ausloesen.
 #
 # Werte kommen aus .env neben dieser Datei (Vorlage: .env.example).
 #   docker compose up -d --build
@@ -14,6 +14,12 @@ services:
   nero-brain:
     build: .
     restart: unless-stopped
+    ports:
+      # Erreichbar aus dem ganzen LAN. Die Schranke ist NERO_CLIENT_TOKENS,
+      # nicht die Netzgrenze. Von aussen fuehrt der Cloudflare-Tunnel herein -
+      # am Router bleibt nichts weitergeleitet. Soll es wirklich nur ein
+      # Interface sein, hier die IP davorschreiben: '192.168.1.10:8090:8000'.
+      - '8090:8000'
     environment:
       # Direkt an den Backend-Container, im internen Docker-Netz.
       #
@@ -28,11 +34,28 @@ services:
       NERO_LLM_MODEL: ${NERO_LLM_MODEL:-openai/gpt-oss-20b}
       GROQ_API_KEY: ${GROQ_API_KEY}
       DAILY_LIMIT_EUR: ${DAILY_LIMIT_EUR:-0.50}
+      # Ein Token je Geraet: "laptop:...,spiegel:...". Leer = offen.
+      NERO_CLIENT_TOKENS: ${NERO_CLIENT_TOKENS}
+      # Offline-Fallback: greift, wenn Groq schweigt oder das Budget erreicht ist.
+      NERO_LLM_FALLBACK: ${NERO_LLM_FALLBACK:-ollama}
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      NERO_STT_PROVIDER: ${NERO_STT_PROVIDER:-groq}
+      NERO_STT_MODEL: ${NERO_STT_MODEL:-whisper-large-v3-turbo}
+      # Sprachausgabe. "null" schaltet sie ab, /speak antwortet dann 503.
+      NERO_TTS_PROVIDER: ${NERO_TTS_PROVIDER:-wyoming}
+      PIPER_HOST: piper
+      # Leer = die Stimme aus dem "command:" des Piper-Dienstes.
+      NERO_TTS_VOICE: ${NERO_TTS_VOICE:-}
       TZ: Europe/Berlin
     volumes:
       - nero_data:/data
     networks:
       - everything-app
+      - nero
+    depends_on:
+      - piper
+      - ollama
     healthcheck:
       test: ["CMD", "python", "-c",
              "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
@@ -40,6 +63,42 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # Piper spricht das Wyoming-Protokoll auf 10200 - rohes TCP, kein HTTP.
+  #
+  # Eigener Dienst statt einer Bibliothek im Brain: das Stimmmodell (~110 MB)
+  # und onnxruntime haben im Nero-Image nichts zu suchen, und Home Assistant
+  # kann denselben Container spaeter mitbenutzen.
+  #
+  # Kein "ports:"-Eintrag, wie beim Brain: von aussen spricht niemand mit Piper.
+  piper:
+    image: rhasspy/wyoming-piper:latest
+    container_name: nero-piper
+    restart: unless-stopped
+    command: --voice de_DE-thorsten-high
+    volumes:
+      # Das Stimmmodell laedt der Container beim ersten Start selbst herunter.
+      # Ohne dieses Volume passiert das bei jedem Neustart erneut.
+      - piper_data:/data
+    networks:
+      - nero
+
+  # Das Modell im Haus. Kommt nur zum Zug, wenn Groq nicht antwortet oder das
+  # Tagesbudget erreicht ist - dann dauert eine Antwort Sekunden statt
+  # Millisekunden, aber sie kommt.
+  #
+  # Modell einmalig laden:
+  #   docker compose exec ollama ollama pull qwen2.5:1.5b
+  ollama:
+    image: ollama/ollama:latest
+    container_name: nero-ollama
+    restart: unless-stopped
+    volumes:
+      # Auf die HDD, nicht auf die 240-GB-SSD - die fuellt sich sonst schnell.
+      # Der Pfad muss auf dem Host existieren und dem Container gehoeren.
+      - /mnt/data/ollama:/root/.ollama
+    networks:
+      - nero
 
 networks:
   # Von der Everything-App-Compose-Datei angelegt (Projektname "Everything-app").
@@ -49,5 +108,9 @@ networks:
     external: true
     name: everything-app_default
 
+  # Nur zwischen Brain und Piper. Piper hat mit der Everything App nichts zu tun.
+  nero:
+
 volumes:
   nero_data:
+  piper_data:

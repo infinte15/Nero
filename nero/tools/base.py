@@ -28,6 +28,8 @@ class ToolContext:
 
     client: EverythingClient
     now: datetime  # zonenbehaftet, Europe/Berlin
+    #: Nur die device.*-Tools brauchen ihn; ``None`` heisst "kein Bus".
+    devices: Any = None
 
 
 @dataclass(frozen=True)

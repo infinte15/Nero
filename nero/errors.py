@@ -24,3 +24,15 @@ class ToolError(NeroError):
 
 class BudgetExceeded(NeroError):
     """Das Tagesbudget fuer LLM-Aufrufe ist aufgebraucht."""
+
+
+class TtsError(NeroError):
+    """Die Sprachausgabe hat nicht geliefert.
+
+    Anders als bei den uebrigen Fehlern hilft die ``speech`` hier nur dem Client
+    auf dem Bildschirm - vorlesen laesst sie sich gerade nicht.
+    """
+
+
+class SttError(NeroError):
+    """Die Spracherkennung hat nicht geliefert."""
