@@ -12,7 +12,11 @@
 services:
 
   nero-brain:
-    build: .
+    build:
+      context: .
+      args:
+        # "[stt-local]" holt faster-whisper mit ins Image - siehe .env.example.
+        NERO_EXTRAS: ${NERO_EXTRAS:-}
     restart: unless-stopped
     ports:
       # Erreichbar aus dem ganzen LAN. Die Schranke ist NERO_CLIENT_TOKENS,
@@ -42,11 +46,22 @@ services:
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
       NERO_STT_PROVIDER: ${NERO_STT_PROVIDER:-groq}
       NERO_STT_MODEL: ${NERO_STT_MODEL:-whisper-large-v3-turbo}
+      # Whisper im Haus. Braucht ein Image, das mit NERO_EXTRAS="[stt-local]"
+      # gebaut wurde - sonst meldet der Fallback, dass er nicht installiert ist.
+      NERO_STT_FALLBACK: ${NERO_STT_FALLBACK:-null}
+      NERO_STT_LOCAL_MODEL: ${NERO_STT_LOCAL_MODEL:-small}
+      # Damit das Modell nicht bei jedem Neustart neu geladen wird.
+      HF_HOME: /data/huggingface
       # Sprachausgabe. "null" schaltet sie ab, /speak antwortet dann 503.
       NERO_TTS_PROVIDER: ${NERO_TTS_PROVIDER:-wyoming}
       PIPER_HOST: piper
       # Leer = die Stimme aus dem "command:" des Piper-Dienstes.
       NERO_TTS_VOICE: ${NERO_TTS_VOICE:-}
+      # Nextcloud als Vorlesequelle. Leer = die notes.*-Tools bleiben stumm.
+      NEXTCLOUD_URL: ${NEXTCLOUD_URL:-}
+      NEXTCLOUD_USER: ${NEXTCLOUD_USER:-}
+      NEXTCLOUD_APP_PASSWORD: ${NEXTCLOUD_APP_PASSWORD:-}
+      NEXTCLOUD_NOTES_PATH: ${NEXTCLOUD_NOTES_PATH:-Notes}
       TZ: Europe/Berlin
     volumes:
       - nero_data:/data

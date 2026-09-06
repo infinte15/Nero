@@ -30,6 +30,10 @@ class ToolContext:
     now: datetime  # zonenbehaftet, Europe/Berlin
     #: Nur die device.*-Tools brauchen ihn; ``None`` heisst "kein Bus".
     devices: Any = None
+    #: Nur die notes.*-Tools; ``None`` heisst "Nextcloud ist nicht eingerichtet".
+    notes: Any = None
+    #: Wieviele Saetze am Stueck vorgelesen werden, bevor zurueckgefragt wird.
+    notes_max_sentences: int = 8
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,17 @@ class Tool:
     params: Mapping[str, ParamSpec] = field(default_factory=dict)
     #: Loest vor der Ausfuehrung eine Rueckfrage aus ("Soll ich wirklich ...?").
     destructive: bool = False
+    #: Zweite Vorlage neben ``speak``, fuer Clients mit einem Bildschirm: dasselbe
+    #: Ergebnis als Zeilen statt als Satz. Ein Satz kann drei Aufgaben nennen, eine
+    #: Liste zeigt alle - und sie laesst sich antippen. Optional; ohne sie bleibt
+    #: ``items`` leer und nichts aendert sich fuer den Satelliten.
+    view: Callable[[Any, ToolContext], list[dict[str, Any]]] | None = None
+    #: Was danach noch offen ist, als vorbereiteter Aufruf. Er wird nicht
+    #: ausgefuehrt, sondern wie eine Rueckfrage hinterlegt: "Soll ich
+    #: weiterlesen?" - und ein "ja" holt ihn ab. Derselbe Weg, den destruktive
+    #: Tools schon gehen, nur wird hier nicht vor der Ausfuehrung gefragt,
+    #: sondern danach.
+    follow_up: Callable[[Any, ToolContext], Any] | None = None
 
     @property
     def wire_name(self) -> str:

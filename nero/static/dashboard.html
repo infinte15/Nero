@@ -1,0 +1,268 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Nero — Dashboard</title>
+<style>
+  /* Der Gegenentwurf zu /spiegel: dort gilt „weiß auf schwarz, keine Grautöne",
+     weil hinter halbdurchlässigem Glas nur leuchtet, was hell ist. Ein Tablet
+     hängt nicht hinter Glas — hier sind Grautöne, Akzente und Flächen wieder
+     erlaubt, und es lässt sich antippen. */
+  :root {
+    --bg: #0f1116; --fl: #171a21; --fg: #e9ecf2; --dim: #8b93a3;
+    --line: #262b34; --accent: #6ea8fe; --gut: #6ee7a8;
+    --tap: 3.2rem;   /* Fingerbreite, nicht Mauszeigerbreite. */
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--fg); overflow: hidden;
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: grid; grid-template-rows: auto 1fr; gap: 2.5vh;
+    padding: 3.5vh 3.5vw; user-select: none;
+  }
+
+  header { display: flex; align-items: baseline; gap: 1.2rem; }
+  #uhr { font-size: 9vh; line-height: 1; font-weight: 200; letter-spacing: -.02em; }
+  #datum { color: var(--dim); font-size: 2.4vh; text-transform: capitalize; }
+  #stand { margin-left: auto; color: var(--dim); font-size: 1.6vh; }
+
+  main { display: grid; grid-template-columns: 1.1fr 1fr; gap: 2.5vw; min-height: 0; }
+  @media (orientation: portrait) { main { grid-template-columns: 1fr; } }
+
+  .spalte { display: flex; flex-direction: column; gap: 2.5vh; min-height: 0; }
+  section { display: flex; flex-direction: column; min-height: 0; }
+  h2 {
+    font-size: 1.5vh; letter-spacing: .3em; text-transform: uppercase;
+    color: var(--dim); margin: 0 0 1.2vh; font-weight: 600;
+  }
+  ul { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1; }
+
+  li {
+    display: flex; align-items: center; gap: .9rem; min-height: var(--tap);
+    padding: .5rem .9rem; border-radius: .6rem; background: var(--fl);
+    margin-bottom: .5rem; font-size: 2.1vh;
+  }
+  li.tap { cursor: pointer; transition: background .12s, opacity .2s; }
+  li.tap:active { background: #202632; }
+  li.erledigt { opacity: .45; }
+  li.erledigt .label { text-decoration: line-through; }
+  .label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta { color: var(--dim); font-size: 1.7vh; font-variant-numeric: tabular-nums; }
+  .zeit {
+    color: var(--accent); font-variant-numeric: tabular-nums;
+    min-width: 4.2rem; font-size: 1.9vh;
+  }
+  .haken {
+    width: 1.6rem; height: 1.6rem; flex: none; border-radius: .4rem;
+    border: 2px solid var(--line); display: grid; place-items: center;
+    font-size: 1.1rem; color: var(--bg);
+  }
+  li.erledigt .haken { background: var(--gut); border-color: var(--gut); }
+  .leer { color: var(--dim); font-size: 2vh; padding: .5rem .9rem; }
+  .weg { opacity: .3; }
+
+  #meldung {
+    position: fixed; left: 50%; bottom: 3.5vh; transform: translate(-50%, 4rem);
+    background: var(--fl); border: 1px solid var(--line); border-radius: .6rem;
+    padding: .8rem 1.2rem; font-size: 2vh; max-width: 80vw; opacity: 0;
+    transition: transform .25s, opacity .25s; pointer-events: none;
+  }
+  #meldung.an { transform: translate(-50%, 0); opacity: 1; }
+
+  #token { position: fixed; inset: 0; display: none; place-items: center; background: var(--bg); }
+  #token.an { display: grid; }
+  #token input {
+    background: var(--fl); color: var(--fg); border: 1px solid var(--line);
+    border-radius: .5rem; font: inherit; font-size: 2.4vh; padding: 1rem;
+    text-align: center; outline: none; width: 60vw; max-width: 22rem;
+  }
+</style>
+
+<header>
+  <div id="uhr">--:--</div>
+  <div id="datum"></div>
+  <div id="stand"></div>
+</header>
+
+<main>
+  <div class="spalte">
+    <section>
+      <h2>Heute</h2>
+      <ul id="heute"><li class="leer">…</li></ul>
+    </section>
+  </div>
+
+  <div class="spalte">
+    <section>
+      <h2>Offen</h2>
+      <ul id="aufgaben"><li class="leer">…</li></ul>
+    </section>
+    <section>
+      <h2>Gewohnheiten</h2>
+      <ul id="gewohnheiten"><li class="leer">…</li></ul>
+    </section>
+  </div>
+</main>
+
+<div id="meldung"></div>
+<div id="token"><input id="feld" type="password" placeholder="Gerätetoken" autocomplete="off"></div>
+
+<script>
+// Dieselbe Zusage wie beim Spiegel: neuer Client, gleiche Schnittstelle. Diese
+// Seite spricht ausschließlich POST /command — auch beim Antippen. Ein Tippen
+// auf eine Aufgabe schickt genau den Satz, den man sonst sagen würde. Damit
+// kann das Tablet nichts, was die Stimme nicht auch kann, und am Brain musste
+// dafür kein Endpunkt dazukommen.
+const $ = (id) => document.getElementById(id);
+const KEY = "nero-token";
+let token = "";
+try { token = localStorage.getItem(KEY) || ""; } catch { /* privates Fenster */ }
+
+const TAGE = ["Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"];
+const MONATE = ["Januar","Februar","März","April","Mai","Juni",
+                "Juli","August","September","Oktober","November","Dezember"];
+
+function uhr() {
+  const t = new Date();
+  $("uhr").textContent =
+    String(t.getHours()).padStart(2, "0") + ":" + String(t.getMinutes()).padStart(2, "0");
+  $("datum").textContent =
+    `${TAGE[t.getDay()]}, ${t.getDate()}. ${MONATE[t.getMonth()]} ${t.getFullYear()}`;
+}
+
+async function frag(text) {
+  const antwort = await fetch("/command", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: "Bearer " + token } : {}),
+    },
+    body: JSON.stringify({ text }),
+  });
+  if (antwort.status === 401) {
+    $("token").classList.add("an");
+    $("feld").focus();
+    throw new Error("Token");
+  }
+  $("token").classList.remove("an");
+  return await antwort.json();
+}
+
+// Titel und Namen kommen aus der App und können alles enthalten. Sie werden
+// deshalb ausschließlich über textContent gesetzt, nie über innerHTML —
+// dieselbe Grenze wie im Brain, nur eine Ebene weiter außen.
+function zeile(item, { zeit, haken, antippen }) {
+  const li = document.createElement("li");
+
+  if (zeit) {
+    const span = document.createElement("span");
+    span.className = "zeit";
+    span.textContent = item.meta || "";
+    li.append(span);
+  }
+  if (haken) {
+    const kasten = document.createElement("span");
+    kasten.className = "haken";
+    kasten.textContent = item.done ? "✓" : "";
+    li.append(kasten);
+  }
+
+  const label = document.createElement("span");
+  label.className = "label";
+  label.textContent = item.label;
+  li.append(label);
+
+  if (!zeit && item.meta) {
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = item.meta;
+    li.append(meta);
+  }
+
+  if (item.done) li.classList.add("erledigt");
+  if (antippen && !item.done) {
+    li.classList.add("tap");
+    li.onclick = () => abhaken(li, antippen(item.label));
+  }
+  return li;
+}
+
+function fuellen(id, items, form, leer) {
+  const liste = $(id);
+  liste.replaceChildren();
+  if (!items.length) {
+    const li = document.createElement("li");
+    li.className = "leer";
+    li.textContent = leer;
+    liste.append(li);
+    return;
+  }
+  for (const item of items) liste.append(zeile(item, form));
+}
+
+async function abhaken(li, satz) {
+  // Sofort durchstreichen. Was das Brain wirklich gemacht hat, sagt die
+  // Meldung — und die Liste zieht beim nächsten Durchlauf nach.
+  li.classList.add("erledigt");
+  li.onclick = null;
+  try {
+    const body = await frag(satz);
+    melden(body.speech);
+  } catch (err) {
+    if (err.message !== "Token") melden("Keine Verbindung.");
+    li.classList.remove("erledigt");
+  }
+  await aktualisieren();
+}
+
+let meldungZeit = null;
+function melden(text) {
+  if (!text) return;
+  $("meldung").textContent = text;
+  $("meldung").classList.add("an");
+  clearTimeout(meldungZeit);
+  meldungZeit = setTimeout(() => $("meldung").classList.remove("an"), 4000);
+}
+
+async function aktualisieren() {
+  try {
+    const [heute, aufgaben, gewohnheiten] = await Promise.all([
+      frag("was steht heute an"),
+      frag("offene Aufgaben"),
+      frag("Gewohnheiten heute"),
+    ]);
+
+    fuellen("heute", heute.items, { zeit: true }, "Heute steht nichts an.");
+    fuellen("aufgaben", aufgaben.items,
+      { antippen: (titel) => `hake die Aufgabe ${titel} ab` }, "Nichts offen.");
+    fuellen("gewohnheiten", gewohnheiten.items,
+      { haken: true, antippen: (name) => `ich habe ${name} gemacht` }, "Heute nichts vorgesehen.");
+
+    document.querySelectorAll("ul").forEach((ul) => ul.classList.remove("weg"));
+    $("stand").textContent = "Stand " + new Date().toLocaleTimeString("de-DE",
+      { hour: "2-digit", minute: "2-digit" });
+  } catch (err) {
+    // Wie beim Spiegel: der letzte bekannte Stand bleibt stehen und verblasst
+    // nur. Eine Wand, die bei jedem Netzhänger leer wird, ist schlechter als
+    // eine, die fünf Minuten alt ist.
+    document.querySelectorAll("ul").forEach((ul) => ul.classList.add("weg"));
+    $("stand").textContent = err.message === "Token" ? "" : "keine Verbindung";
+  }
+}
+
+$("feld").addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  token = $("feld").value.trim();
+  try { localStorage.setItem(KEY, token); } catch { /* nicht schlimm */ }
+  $("feld").value = "";
+  $("token").classList.remove("an");
+  aktualisieren();
+});
+
+uhr();
+setInterval(uhr, 1000);
+aktualisieren();
+setInterval(aktualisieren, 5 * 60 * 1000);
+// Nach dem Aufwachen des Bildschirms ist der Stand alt.
+document.addEventListener("visibilitychange", () => !document.hidden && aktualisieren());
+</script>

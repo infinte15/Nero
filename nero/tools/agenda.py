@@ -63,6 +63,21 @@ def _speak_agenda(events: list[dict[str, Any]], ctx: ToolContext) -> str:
     return sentence + "."
 
 
+def _view_agenda(events: list[dict[str, Any]], _ctx: ToolContext) -> list[dict[str, Any]]:
+    """Alle Einträge, nicht nur die ersten fünf - ein Bildschirm hat mehr Platz als ein Satz."""
+    zeilen = []
+    for event in events:
+        start = from_app(event.get("startTime"))
+        zeilen.append(
+            {
+                "label": event.get("title") or "ohne Titel",
+                "meta": fmt_time(start) if start else None,
+                "done": False,
+            }
+        )
+    return zeilen
+
+
 async def _next_event(ctx: ToolContext) -> dict[str, Any] | None:
     events = await _events_between(ctx, ctx.now, ctx.now + timedelta(days=7))
     naive_now = ctx.now.replace(tzinfo=None)
@@ -90,6 +105,7 @@ TOOLS = [
         description="Alle Termine, Aufgabenblöcke und Gewohnheiten für heute vorlesen",
         handler=_today_agenda,
         speak=_speak_agenda,
+        view=_view_agenda,
     ),
     Tool(
         name="app.next_event",

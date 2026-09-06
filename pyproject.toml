@@ -21,6 +21,11 @@ satellite = [
     "sounddevice>=0.4",
     "numpy>=1.24",
 ]
+# Nur fuer Whisper im Haus. Wie [satellite] bewusst ein Extra: sonst zoege jedes
+# Brain-Image ctranslate2 mit, auch das, welches den Fallback nie einschaltet.
+stt-local = [
+    "faster-whisper>=1.0",
+]
 # Nur fuer den Geraete-Agent (Phase 5).
 agent = [
     "websockets>=13",

@@ -7,16 +7,16 @@ mit dem Ergebnis, dass das Modell Werkzeuge aufruft, die es nicht gibt.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
 from nero.errors import ToolError
 from nero.schemas import ToolCall
-from nero.tools import agenda, devices, habits, study, system, tasks
+from nero.tools import agenda, devices, habits, notes, study, system, tasks
 from nero.tools.base import Tool, ToolContext
 
 TOOLS: dict[str, Tool] = {
     tool.name: tool
-    for module in (system, agenda, tasks, habits, study, devices)
+    for module in (system, agenda, tasks, habits, study, devices, notes)
     for tool in module.TOOLS
 }
 
@@ -39,8 +39,18 @@ def llm_schemas() -> list[dict[str, Any]]:
     return [tool.llm_schema() for tool in TOOLS.values()]
 
 
-async def dispatch(call: ToolCall, ctx: ToolContext) -> tuple[Tool, str]:
-    """Fuehrt einen Tool-Aufruf aus und formt die gesprochene Antwort.
+class Dispatched(NamedTuple):
+    """Ein Ergebnis, mehrere Vorlagen: der Satz zum Vorlesen, die Zeilen zum
+    Anzeigen - und, falls etwas offen bleibt, der Aufruf, der es fortsetzt."""
+
+    tool: Tool
+    speech: str
+    items: list[dict[str, Any]]
+    follow_up: ToolCall | None = None
+
+
+async def dispatch(call: ToolCall, ctx: ToolContext) -> Dispatched:
+    """Fuehrt einen Tool-Aufruf aus und formt die Antwort.
 
     Unbekannte Argumente werden verworfen statt weitergereicht: ein Modell darf
     sich Parameter ausdenken, ohne dass das hier einen TypeError wirft.
@@ -53,4 +63,6 @@ async def dispatch(call: ToolCall, ctx: ToolContext) -> tuple[Tool, str]:
         raise ToolError("Dazu fehlt mir noch eine Angabe.")
 
     result = await tool.handler(ctx, **accepted)
-    return tool, tool.speak(result, ctx)
+    items = tool.view(result, ctx) if tool.view else []
+    follow_up = tool.follow_up(result, ctx) if tool.follow_up else None
+    return Dispatched(tool, tool.speak(result, ctx), items, follow_up)

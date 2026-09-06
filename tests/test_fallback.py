@@ -8,11 +8,12 @@ import respx
 
 from nero.budget import DailyBudget
 from nero.config import Settings
-from nero.errors import BudgetExceeded
+from nero.errors import BudgetExceeded, SttError
 from nero.providers.chain import ChainProvider
 from nero.providers.ollama import OllamaProvider
 from nero.router.llm import llm_route
 from nero.schemas import ToolCall
+from nero.stt.chain import ChainTranscriber
 from tests.conftest import NOW
 
 OLLAMA = "http://ollama.test:11434"
@@ -170,3 +171,88 @@ def test_build_provider_baut_die_kette_nur_wenn_noetig(tmp_path):
 
     aus = build_provider(Settings(groq_api_key="", nero_llm_fallback="null"), budget)
     assert aus.name == "null"
+
+
+# ---- Das Ohr im Haus --------------------------------------------------------
+
+
+class FakeStt:
+    def __init__(self, name: str, free: bool, text: str | None = None) -> None:
+        self.name = name
+        self.free = free
+        self._text = text
+        self.calls = 0
+
+    async def transcribe(self, audio: bytes, filename: str) -> str:
+        self.calls += 1
+        if self._text is None:
+            raise SttError("Ich konnte die Aufnahme nicht verstehen.")
+        return self._text
+
+    async def aclose(self) -> None:
+        return None
+
+
+async def test_bei_erschoepftem_budget_hoert_das_haus_weiter(tmp_path):
+    """Die letzte Budgetlücke: ohne Transkription greift auch der Keyword-Router nicht."""
+    groq = FakeStt("groq", free=False, text="von Groq")
+    lokal = FakeStt("local", free=True, text="wie spät ist es")
+    kette = ChainTranscriber([groq, lokal], make_budget(tmp_path, limit=0.0))
+
+    assert await kette.transcribe(b"x", "befehl.wav") == "wie spät ist es"
+    assert groq.calls == 0, "ein Aufruf, der Geld kostet, darf hier nicht passieren"
+
+
+async def test_wenn_groq_nicht_versteht_uebernimmt_das_haus(tmp_path):
+    groq = FakeStt("groq", free=False, text=None)
+    lokal = FakeStt("local", free=True, text="wie spät ist es")
+    kette = ChainTranscriber([groq, lokal], make_budget(tmp_path))
+
+    assert await kette.transcribe(b"x", "befehl.wav") == "wie spät ist es"
+    assert groq.calls == 1
+
+
+async def test_eine_leere_aufnahme_wird_nicht_zweimal_gedeutet(tmp_path):
+    """Wer nichts gesagt hat, hat nichts gesagt - ein zweites Modell findet dasselbe."""
+    groq = FakeStt("groq", free=False, text="")
+    lokal = FakeStt("local", free=True, text="ich bin mir sicher etwas gehört zu haben")
+    kette = ChainTranscriber([groq, lokal], make_budget(tmp_path))
+
+    assert await kette.transcribe(b"x", "befehl.wav") == ""
+    assert lokal.calls == 0
+
+
+async def test_versteht_keiner_etwas_bleibt_die_meldung(tmp_path):
+    kette = ChainTranscriber(
+        [FakeStt("groq", False), FakeStt("local", True)], make_budget(tmp_path)
+    )
+    with pytest.raises(SttError):
+        await kette.transcribe(b"x", "befehl.wav")
+
+
+def test_build_stt_baut_die_kette_nur_wenn_noetig(tmp_path):
+    from nero.main import build_stt
+
+    budget = make_budget(tmp_path)
+
+    nur_groq = build_stt(Settings(groq_api_key="k", nero_stt_fallback="null"), budget)
+    assert nur_groq.name == "groq"
+
+    beide = build_stt(Settings(groq_api_key="k", nero_stt_fallback="local"), budget)
+    assert beide.name == "groq+local" and beide.free is True
+
+    # Ohne Schlüssel bleibt das Haus allein übrig - genau der Offline-Fall.
+    nur_lokal = build_stt(Settings(groq_api_key="", nero_stt_fallback="local"), budget)
+    assert nur_lokal.name == "local" and nur_lokal.free is True
+
+    aus = build_stt(Settings(groq_api_key="", nero_stt_fallback="null"), budget)
+    assert aus.name == "null"
+
+
+def test_das_modell_wird_erst_beim_ersten_befehl_geladen():
+    """Der Normalfall ist, dass es nie gebraucht wird - dafür startet niemand eine Minute länger."""
+    from nero.stt.local import LocalWhisper
+
+    lokal = LocalWhisper(model="small")
+    assert lokal._model is None
+    assert lokal.free is True

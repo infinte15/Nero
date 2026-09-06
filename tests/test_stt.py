@@ -222,7 +222,8 @@ def test_budget_bremst_vor_der_transkription(api):
     """Anders als bei /command hilft der Keyword-Router hier nicht.
 
     Ohne Transkription gibt es keinen Text, auf den er angewendet werden könnte -
-    deshalb wird gar nicht erst aufgenommen, statt Geld auszugeben.
+    deshalb wird gar nicht erst aufgenommen, statt Geld auszugeben. Das gilt
+    genau so lange, wie es kein Ohr im Haus gibt (siehe unten).
     """
     from nero.main import app
 
@@ -232,6 +233,20 @@ def test_budget_bremst_vor_der_transkription(api):
     body = upload(api).json()
     assert body["speech"] == "Ich habe heute mein Limit erreicht."
     assert stub.calls == []
+
+
+def test_mit_einem_ohr_im_haus_bremst_das_budget_nicht_mehr(api):
+    """Die letzte Budgetlücke, geschlossen: das lokale Modell kostet nichts."""
+    from nero.main import app
+
+    app.state.budget._spent = 99.0
+    app.state.stt = stub = StubStt()
+    stub.free = True
+
+    body = upload(api).json()
+    assert body["text"] == "wie spät ist es"
+    assert body["tool"] == "system.time"
+    assert len(stub.calls) == 1
 
 
 def test_leere_und_zu_grosse_aufnahmen(api):
@@ -244,8 +259,8 @@ def test_leere_und_zu_grosse_aufnahmen(api):
     assert api.post("/listen").status_code == 422
 
 
-def test_health_meldet_die_spracherkennung(api):
-    assert api.get("/health").json()["stt"] == "null"
+def test_status_meldet_die_spracherkennung(api):
+    assert api.get("/status").json()["stt"] == "null"
 
 
 def test_testseite_wird_ausgeliefert(api):

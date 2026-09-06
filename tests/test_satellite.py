@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import array
 import io
+import json
 import wave
 from collections.abc import AsyncIterator
 
@@ -21,7 +22,7 @@ import respx
 from nero.satellite.client import BrainClient
 from nero.satellite.config import FRAME_SAMPLES, SAMPLE_RATE, SatelliteSettings
 from nero.satellite.endpoint import Endpointer, State, rms
-from nero.satellite.runner import Satellite, preroll_frames
+from nero.satellite.runner import Satellite, ist_zustimmung, preroll_frames
 
 BRAIN = "http://brain.test"
 FRAME_SECONDS = FRAME_SAMPLES / SAMPLE_RATE  # 80 ms
@@ -214,14 +215,30 @@ class FakeMic:
 
 
 class FakeBrain:
-    def __init__(self, speech: str = "Es ist 9 Uhr.") -> None:
+    """Antwortet der Reihe nach mit den vorgegebenen Koerpern.
+
+    ``antworten`` ist eine Liste von ``(text, body)``: was das Brain verstanden
+    haben will und was es zurueckgibt. Die letzte Antwort gilt weiter, wenn mehr
+    Befehle kommen als Antworten vorgesehen sind.
+    """
+
+    def __init__(self, speech: str = "Es ist 9 Uhr.", antworten: list[dict] | None = None) -> None:
         self.speech = speech
+        self.antworten = antworten
         self.uploads: list[bytes] = []
         self.gesprochen: list[str] = []
+        self.bestaetigt: list[str] = []
 
     async def listen(self, wav: bytes) -> dict:
         self.uploads.append(wav)
+        if self.antworten:
+            index = min(len(self.uploads) - 1, len(self.antworten) - 1)
+            return {"text": "wie spät ist es", **self.antworten[index]}
         return {"speech": self.speech, "text": "wie spät ist es"}
+
+    async def confirm(self, token: str) -> dict:
+        self.bestaetigt.append(token)
+        return {"speech": "Getippt.", "text": ""}
 
     async def speak(self, text: str) -> bytes:
         self.gesprochen.append(text)
@@ -323,3 +340,138 @@ async def test_stumme_antwort_wird_nicht_abgespielt():
 
     assert len(brain.uploads) == 1
     assert brain.gesprochen == [] and gespielt == []
+
+
+# ---- Die Rueckfrage --------------------------------------------------------
+
+
+def test_zustimmung_ist_eine_geschlossene_liste():
+    """Kein Modellaufruf: was zaehlt, steht in JA und sonst nirgends."""
+    for satz in ("ja", "Ja.", "ja bitte", "mach das", "OK!", "bestätigt"):
+        assert ist_zustimmung(satz)
+    for satz in ("nein", "lieber nicht", "was steht heute an", "ja aber später", ""):
+        assert not ist_zustimmung(satz)
+
+
+RUECKFRAGE = {
+    "speech": "Soll ich wirklich Text tippen (text: Hallo Welt)?",
+    "needs_confirmation": True,
+    "confirm_token": "abc123",
+}
+
+EIN_BEFEHL = frames_for(0.8, LAUT) + frames_for(0.5, STILL)
+
+
+class WakeBeiJedemSatz:
+    """Loest beim ersten lauten Block nach jedem ``reset()`` aus.
+
+    Fuer Ablaeufe ueber mehrere Befehle hinweg handlicher als feste
+    Blocknummern: wie viele Bloecke die Aufnahme schluckt, haengt am
+    Endpointer und nicht am Test.
+    """
+
+    name = "fake"
+
+    def __init__(self) -> None:
+        self._scharf = True
+        self.resets = 0
+
+    def heard(self, frame: bytes) -> bool:
+        if self._scharf and frame == LAUT:
+            self._scharf = False
+            return True
+        return False
+
+    def reset(self) -> None:
+        self._scharf = True
+        self.resets += 1
+
+
+def befehle(anzahl: int) -> list[bytes]:
+    return EIN_BEFEHL * anzahl + frames_for(0.5, STILL)
+
+
+async def test_ja_auf_eine_rueckfrage_fuehrt_aus():
+    brain = FakeBrain(antworten=[RUECKFRAGE, {"speech": "", "text": "ja"}])
+    satellite, _, _ = make_satellite(WakeBeiJedemSatz(), brain)
+
+    await satellite.run(stream(befehle(2)))
+
+    assert brain.bestaetigt == ["abc123"]
+    assert brain.gesprochen == [RUECKFRAGE["speech"], "Getippt."]
+
+
+async def test_etwas_anderes_gesagt_zaehlt_als_nein():
+    """Nur ein "ja" bestaetigt. Alles andere verwirft die Rueckfrage."""
+    agenda = {"speech": "Heute hast du 3 Einträge.", "text": "was steht heute an"}
+    brain = FakeBrain(antworten=[RUECKFRAGE, agenda])
+    satellite, _, _ = make_satellite(WakeBeiJedemSatz(), brain)
+
+    await satellite.run(stream(befehle(2)))
+
+    assert brain.bestaetigt == []
+    # Der zweite Befehl wird trotzdem beantwortet - er war ja einer.
+    assert brain.gesprochen == [RUECKFRAGE["speech"], "Heute hast du 3 Einträge."]
+
+
+async def test_ein_ja_ohne_offene_rueckfrage_bestaetigt_nichts():
+    wake = FakeWake(bei={1})
+    brain = FakeBrain(antworten=[{"speech": "Das habe ich nicht verstanden.", "text": "ja"}])
+    satellite, _, _ = make_satellite(wake, brain)
+
+    await satellite.run(stream(frames_for(0.8, LAUT) + frames_for(0.5, STILL)))
+
+    assert brain.bestaetigt == []
+
+
+async def test_eine_rueckfrage_gilt_nur_fuer_den_naechsten_befehl():
+    """Sonst wuerde ein "ja" Minuten spaeter noch etwas ausloesen."""
+    brain = FakeBrain(
+        antworten=[
+            RUECKFRAGE,
+            {"speech": "Heute hast du 3 Einträge.", "text": "was steht heute an"},
+            {"speech": "Das habe ich nicht verstanden.", "text": "ja"},
+        ]
+    )
+    satellite, _, _ = make_satellite(WakeBeiJedemSatz(), brain)
+
+    await satellite.run(stream(befehle(3)))
+
+    assert len(brain.uploads) == 3
+    assert brain.bestaetigt == []
+
+
+@respx.mock
+async def test_confirm_schickt_nur_das_token():
+    route = respx.post(f"{BRAIN}/command").mock(
+        return_value=httpx.Response(200, json={"speech": "Getippt.", "route": "confirm"})
+    )
+    client = BrainClient(BRAIN, token="geheim")
+    try:
+        assert (await client.confirm("abc123"))["speech"] == "Getippt."
+    finally:
+        await client.aclose()
+
+    request = route.calls.last.request
+    assert request.headers["authorization"] == "Bearer geheim"
+    assert json.loads(request.content) == {"confirm_token": "abc123"}
+
+
+@respx.mock
+async def test_abgelaufene_rueckfrage_wird_gesagt_statt_geworfen():
+    respx.post(f"{BRAIN}/command").mock(return_value=httpx.Response(410, json={"detail": "weg"}))
+    client = BrainClient(BRAIN)
+    try:
+        assert (await client.confirm("alt"))["speech"] == "Die Rückfrage ist abgelaufen."
+    finally:
+        await client.aclose()
+
+
+@respx.mock
+async def test_brain_weg_beim_bestaetigen():
+    respx.post(f"{BRAIN}/command").mock(side_effect=httpx.ConnectError("weg"))
+    client = BrainClient(BRAIN)
+    try:
+        assert (await client.confirm("abc"))["speech"] == "Ich erreiche das Brain gerade nicht."
+    finally:
+        await client.aclose()

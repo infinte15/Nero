@@ -78,8 +78,14 @@ def test_health_und_testseite_bleiben_offen(api):
     # /health braucht der Docker-Healthcheck, / kann keinen Header mitschicken -
     # die Seite fragt das Token selbst ab und legt es an die fetch-Aufrufe.
     assert api.get("/health").status_code == 200
-    assert api.get("/health").json()["clients"] == 2
     assert api.get("/").status_code == 200
+
+
+def test_die_betriebsdaten_stehen_nicht_offen_im_netz(api):
+    """Geraetenamen und Tagesausgaben gehen niemanden an, der nur die Domain kennt."""
+    assert "clients" not in api.get("/health").json()
+    assert api.get("/status").status_code == 401
+    assert api.get("/status", headers={"Authorization": "Bearer abc123"}).json()["clients"] == 2
 
 
 def test_ohne_konfigurierte_tokens_bleibt_alles_offen(monkeypatch, tmp_path):

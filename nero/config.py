@@ -72,6 +72,17 @@ class Settings(BaseSettings):
         "Karteikarten, Analysis, Übungsblatt, Uni."
     )
     stt_timeout_seconds: float = 20.0
+
+    # Whisper im Haus, als zweites Glied hinter Groq. Greift, wenn Groq nicht
+    # antwortet ODER das Tagesbudget erreicht ist - das lokale Modell kostet
+    # nichts. Braucht "faster-whisper" aus dem Extra [stt-local].
+    nero_stt_fallback: Literal["local", "null"] = "null"
+    # tiny/base/small/medium/large-v3. "small" ist der Punkt, an dem Deutsch
+    # zuverlaessig wird; darueber wird es auf dieser CPU langsamer als der Satz.
+    nero_stt_local_model: str = "small"
+    # int8 rechnet auf einer CPU ohne AVX-512 am schnellsten; float32 ist genauer.
+    nero_stt_local_compute_type: str = "int8"
+    nero_stt_local_device: str = "cpu"
     # Groq nimmt bis 25 MB. Ein gesprochener Befehl liegt bei wenigen Dutzend
     # Kilobyte - alles darueber ist ein Fehler und kein Befehl.
     max_audio_bytes: int = 10 * 1024 * 1024
@@ -97,7 +108,20 @@ class Settings(BaseSettings):
     daily_limit_eur: float = 0.50
     usage_file: Path = Path("data/usage.json")
 
-    # Wie lange eine Rueckfrage bei destruktiven Tools gueltig bleibt.
+    # ---- Nextcloud (Vorlesequelle) ----
+    # Leer = die notes.*-Tools sagen, dass Nextcloud nicht eingerichtet ist.
+    # Das Passwort ist ein APP-Passwort aus den Nextcloud-Einstellungen, nicht
+    # das Hauptpasswort: es laesst sich einzeln widerrufen.
+    nextcloud_url: str = ""
+    nextcloud_user: str = ""
+    nextcloud_app_password: str = ""
+    nextcloud_notes_path: str = "Notes"
+    # Wieviele Saetze am Stueck vorgelesen werden. Eine vierzigseitige Notiz
+    # will niemand am Stueck hoeren - danach wird gefragt, ob es weitergehen soll.
+    notes_max_sentences: int = 8
+
+    # Wie lange eine Rueckfrage bei destruktiven Tools gueltig bleibt. Dieselbe
+    # Frist gilt fuer ein "Soll ich weiterlesen?".
     confirm_ttl_seconds: int = 120
 
     def price_eur_per_mtok(self, model: str) -> tuple[float, float]:

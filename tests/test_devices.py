@@ -152,7 +152,7 @@ async def run_tool(bus, name: str, **args):
     ctx = ToolContext(client=None, now=None, devices=bus)
     from nero.schemas import ToolCall
 
-    _, speech = await registry.dispatch(ToolCall(name, args), ctx)
+    _, speech, *_ = await registry.dispatch(ToolCall(name, args), ctx)
     return speech
 
 
@@ -246,3 +246,22 @@ def test_spiegel_nutzt_nur_die_bestehende_schnittstelle():
     assert "/command" in seite
     for eigener in ("/spiegel/", "/mirror", "/agenda", "/api/"):
         assert eigener not in seite
+
+
+def test_dashboard_nutzt_nur_die_bestehende_schnittstelle():
+    """Dieselbe Zusage fuer das Tablet - und die ist dort mehr wert.
+
+    Das Dashboard hakt Aufgaben und Gewohnheiten per Fingertipp ab. Genau da
+    waere die Versuchung gross, kurz einen eigenen Endpunkt zu bauen; stattdessen
+    schickt ein Tipp denselben Satz, den man sonst sagen wuerde.
+    """
+    from pathlib import Path
+
+    import nero
+
+    seite = (Path(nero.__file__).parent / "static" / "dashboard.html").read_text(encoding="utf-8")
+    assert "/command" in seite
+    for eigener in ("/dashboard/", "/tasks", "/habits", "/agenda", "/api/"):
+        assert eigener not in seite
+    # Titel und Namen kommen aus der App - gesetzt wird nur ueber textContent.
+    assert ".innerHTML" not in seite

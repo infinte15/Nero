@@ -7,9 +7,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Standardmaessig nur die Grundabhaengigkeiten. Wer Whisper im Haus will, baut
+# mit --build-arg NERO_EXTRAS="[stt-local]" - das zieht ctranslate2 mit und
+# verdreifacht das Image, deshalb ist es nicht die Vorgabe.
+ARG NERO_EXTRAS=""
+
 COPY pyproject.toml ./
 COPY nero ./nero
-RUN pip install --no-cache-dir .
+RUN pip install --no-cache-dir ".${NERO_EXTRAS}"
 
 # Nicht als root. /data haelt den Nutzungszaehler und spaeter die Geraete-Tokens.
 RUN useradd -r -u 1001 nero && mkdir -p /data && chown nero:nero /data

@@ -42,13 +42,16 @@
   .heard { color: var(--dim); font-size: .875rem; margin: 0 0 .35rem; }
   .said { margin: 0; }
   .meta { color: var(--dim); font-size: .75rem; margin: .5rem 0 0; font-variant: small-caps; }
+  .frage { display: flex; gap: .5rem; margin: .7rem 0 0; }
+  .frage button { padding: .45rem .9rem; cursor: pointer; }
+  .frage button.ja { border-color: var(--accent); }
   .hint { color: var(--dim); font-size: .8rem; margin: 1.75rem 0 0; }
   code { background: #1c2028; padding: .1rem .3rem; border-radius: .25rem; font-size: .85em; }
 </style>
 
 <main>
   <h1>Nero</h1>
-  <p class="sub">Phase 3 — Testseite für Spracheingabe</p>
+  <p class="sub">Testseite für Spracheingabe</p>
 
   <button id="rec">Aufnahme starten</button>
 
@@ -199,7 +202,38 @@ function show(body, heard, bad) {
     card.append(meta);
   }
 
+  // Destruktive Tools fragen zurück, bevor sie etwas anfassen. Ohne diese zwei
+  // Knöpfe gäbe es auf dem Bildschirm keinen Weg, die Frage zu beantworten —
+  // das Brain stellt sie seit Phase 5, beantwortet hat sie bis hier niemand.
+  if (body.needs_confirmation && body.confirm_token) {
+    card.append(confirmButtons(body.confirm_token));
+  }
+
   $("out").prepend(card);
+}
+
+function confirmButtons(confirm_token) {
+  const zeile = document.createElement("div");
+  zeile.className = "frage";
+
+  const ja = document.createElement("button");
+  ja.className = "ja";
+  ja.textContent = "Ja";
+  ja.onclick = async () => {
+    zeile.remove();
+    setStatus("Führe aus …");
+    // Kein Text, nur das Token: das Brain hat den Aufruf schon liegen. Was
+    // ausgeführt wird, steht damit fest, bevor „Ja" gedrückt wird.
+    await handle(post("/command", { confirm_token }));
+  };
+
+  const nein = document.createElement("button");
+  nein.textContent = "Abbrechen";
+  // Nichts schicken. Das Token läuft nach CONFIRM_TTL_SECONDS von selbst ab.
+  nein.onclick = () => { zeile.remove(); setStatus("Abgebrochen."); };
+
+  zeile.append(ja, nein);
+  return zeile;
 }
 
 // Zweiter Aufruf statt vertonter Antwort: /listen und /speak bleiben so einzeln

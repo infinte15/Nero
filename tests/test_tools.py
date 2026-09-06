@@ -29,13 +29,13 @@ def event(title, start, **extra):
 async def test_uhrzeit_ohne_api_aufruf(ctx):
     with respx.mock(assert_all_called=False) as mock:
         catch_all = mock.route(host="app.test")
-        _tool, speech = await dispatch(ToolCall("system.time"), ctx)
+        _tool, speech, *_ = await dispatch(ToolCall("system.time"), ctx)
     assert speech == "Es ist 9:30 Uhr."
     assert not catch_all.called, "system.time darf die App nicht anfassen"
 
 
 async def test_datum(ctx):
-    _tool, speech = await dispatch(ToolCall("system.date"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("system.date"), ctx)
     assert speech == "Heute ist Freitag, 4. September."
 
 
@@ -54,7 +54,7 @@ async def test_tagesagenda_zaehlt_und_liest_vor(ctx):
             ],
         )
     )
-    _tool, speech = await dispatch(ToolCall("app.today_agenda"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.today_agenda"), ctx)
     assert speech == (
         "Heute hast du 3 Einträge: 9:00 Uhr Analysis, 12:00 Uhr Mittagessen "
         "und 17:00 Uhr Sport."
@@ -76,7 +76,7 @@ async def test_tagesagenda_sendet_naive_zeitstempel(ctx):
 @respx.mock
 async def test_tagesagenda_leer(ctx):
     respx.get(EVENTS_URL).mock(return_value=httpx.Response(200, json=[]))
-    _tool, speech = await dispatch(ToolCall("app.today_agenda"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.today_agenda"), ctx)
     assert speech == "Heute steht nichts an."
 
 
@@ -88,7 +88,7 @@ async def test_tagesagenda_kuerzt_lange_tage(ctx):
             json=[event(f"Block {i}", f"2026-09-04T{8 + i:02d}:00:00") for i in range(7)],
         )
     )
-    _tool, speech = await dispatch(ToolCall("app.today_agenda"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.today_agenda"), ctx)
     assert speech.startswith("Heute hast du 7 Einträge:")
     assert speech.endswith(", und 2 weitere.")
 
@@ -106,7 +106,7 @@ async def test_naechster_termin_ueberspringt_erledigtes_und_vergangenes(ctx):
             ],
         )
     )
-    _tool, speech = await dispatch(ToolCall("app.next_event"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.next_event"), ctx)
     assert speech == "Als nächstes: Analysis heute um 14:00 Uhr."
 
 
@@ -115,14 +115,14 @@ async def test_naechster_termin_an_einem_anderen_tag(ctx):
     respx.get(EVENTS_URL).mock(
         return_value=httpx.Response(200, json=[event("Zahnarzt", "2026-09-08T11:15:00")])
     )
-    _tool, speech = await dispatch(ToolCall("app.next_event"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.next_event"), ctx)
     assert speech == "Als nächstes: Zahnarzt am Dienstag um 11:15 Uhr."
 
 
 @respx.mock
 async def test_naechster_termin_wenn_nichts_kommt(ctx):
     respx.get(EVENTS_URL).mock(return_value=httpx.Response(200, json=[]))
-    _tool, speech = await dispatch(ToolCall("app.next_event"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.next_event"), ctx)
     assert speech == "In den nächsten sieben Tagen steht nichts an."
 
 
@@ -144,7 +144,7 @@ async def test_aufgabe_anlegen_mit_faelligkeit(ctx):
     call = ToolCall(
         "app.create_task", {"title": "Analysis-Übungsblatt abgeben", "due": "2026-09-10"}
     )
-    _tool, speech = await dispatch(call, ctx)
+    _tool, speech, *_ = await dispatch(call, ctx)
 
     import json
 
@@ -159,7 +159,7 @@ async def test_aufgabe_anlegen_nur_mit_titel(ctx):
     route = respx.post(f"{BASE_URL}/api/tasks").mock(
         return_value=httpx.Response(201, json={"id": 8, "title": "Milch kaufen"})
     )
-    _tool, speech = await dispatch(ToolCall("app.create_task", {"title": "Milch kaufen"}), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.create_task", {"title": "Milch kaufen"}), ctx)
 
     import json
 
@@ -184,7 +184,7 @@ async def test_erfundene_parameter_werden_verworfen(ctx):
             return_value=httpx.Response(201, json={"id": 9, "title": "X"})
         )
         call = ToolCall("app.create_task", {"title": "X", "prioritaet": "hoch", "farbe": "rot"})
-        _tool, speech = await dispatch(call, ctx)
+        _tool, speech, *_ = await dispatch(call, ctx)
     assert speech == "Aufgabe „X“ angelegt."
 
 
@@ -196,7 +196,7 @@ async def test_offene_aufgaben(ctx):
             json=[{"id": i, "title": t} for i, t in enumerate(["Milch", "Steuer", "Bad", "Auto"])],
         )
     )
-    _tool, speech = await dispatch(ToolCall("app.open_tasks"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.open_tasks"), ctx)
     assert speech == "Du hast 4 offene Aufgaben: Milch, Steuer und Bad, und 1 weitere."
 
 
@@ -214,7 +214,7 @@ async def test_aufgabe_abhaken_loest_titel_auf(ctx):
     complete = respx.put(f"{BASE_URL}/api/tasks/3/complete").mock(
         return_value=httpx.Response(200, json={})
     )
-    _tool, speech = await dispatch(ToolCall("app.complete_task", {"title": "Analysis"}), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.complete_task", {"title": "Analysis"}), ctx)
     assert complete.called
     assert speech == "Aufgabe „Analysis-Übungsblatt abgeben“ ist erledigt."
 
@@ -261,7 +261,7 @@ async def test_gewohnheiten_heute_filtert_nach_wochentag(ctx):
             ],
         )
     )
-    _tool, speech = await dispatch(ToolCall("app.habits_today"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.habits_today"), ctx)
     assert speech == "Offen: Joggen. Erledigt: Lesen."
     assert "Yoga" not in speech
 
@@ -275,7 +275,7 @@ async def test_gewohnheiten_alle_erledigt(ctx):
                    "completedDates": ["2026-09-04"]}],
         )
     )
-    _tool, speech = await dispatch(ToolCall("app.habits_today"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.habits_today"), ctx)
     assert speech == "Alle 1 Gewohnheiten für heute sind erledigt."
 
 
@@ -290,7 +290,7 @@ async def test_gewohnheit_abhaken(ctx):
     complete = respx.post(f"{BASE_URL}/api/habits/5/complete").mock(
         return_value=httpx.Response(200)
     )
-    _tool, speech = await dispatch(ToolCall("app.complete_habit", {"name": "joggen"}), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.complete_habit", {"name": "joggen"}), ctx)
     assert complete.called
     assert speech == "„Joggen“ für heute abgehakt. Das sind 12 Tage am Stück."
 
@@ -312,7 +312,7 @@ async def test_lernfortschritt_einzelnes_fach(ctx):
         )
     )
     call = ToolCall("app.study_progress", {"subject": "Analysis"})
-    _tool, speech = await dispatch(call, ctx)
+    _tool, speech, *_ = await dispatch(call, ctx)
     assert speech == "In Analysis 3,5 von 6 Stunden geschafft. Es fehlen noch 2,5 Stunden."
 
 
@@ -327,7 +327,7 @@ async def test_lernfortschritt_alle_faecher(ctx):
             ],
         )
     )
-    _tool, speech = await dispatch(ToolCall("app.study_progress"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.study_progress"), ctx)
     assert speech == (
         "Diese Woche: Analysis 3,5 von 6 Stunden und LinAlg 4 von 4 Stunden."
     )
@@ -341,7 +341,7 @@ async def test_faellige_karten(ctx):
             json=[{"id": i, "deckName": "Analysis" if i < 3 else "Physik"} for i in range(5)],
         )
     )
-    _tool, speech = await dispatch(ToolCall("app.flashcards_due"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.flashcards_due"), ctx)
     assert speech == "Es sind 5 Karten fällig, davon 3 in Analysis und 2 in Physik."
 
 
@@ -350,7 +350,7 @@ async def test_keine_faelligen_karten(ctx):
     respx.get(f"{BASE_URL}/api/study/flashcards/due").mock(
         return_value=httpx.Response(200, json=[])
     )
-    _tool, speech = await dispatch(ToolCall("app.flashcards_due"), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.flashcards_due"), ctx)
     assert speech == "Es sind keine Karteikarten fällig."
 
 
@@ -402,5 +402,5 @@ async def test_gewohnheit_die_heute_schon_abgehakt_war(ctx):
         )
     )
     respx.post(f"{BASE_URL}/api/habits/5/complete").mock(return_value=httpx.Response(200))
-    _tool, speech = await dispatch(ToolCall("app.complete_habit", {"name": "Joggen"}), ctx)
+    _tool, speech, *_ = await dispatch(ToolCall("app.complete_habit", {"name": "Joggen"}), ctx)
     assert speech == "„Joggen“ war heute schon abgehakt. Das sind 11 Tage am Stück."

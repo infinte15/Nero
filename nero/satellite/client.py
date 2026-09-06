@@ -1,7 +1,8 @@
 """Der Satellit spricht mit dem Brain.
 
-Genau zwei Aufrufe: die Aufnahme an ``/listen``, der Antwortsatz an ``/speak``.
-Mehr kennt der Satellit vom Brain nicht - und vom Rest der Welt gar nichts.
+Drei Aufrufe: die Aufnahme an ``/listen``, ein "ja" auf eine Rueckfrage an
+``/command``, der Antwortsatz an ``/speak``. Mehr kennt der Satellit vom Brain
+nicht - und vom Rest der Welt gar nichts.
 
 Ein Ausfall des Brains darf den Satelliten nicht beenden. Er laeuft 24/7 neben
 einem Server, der neu startet, und ein Neustart des Brains soll hoechstens einen
@@ -40,6 +41,28 @@ class BrainClient:
             body = response.json()
         except httpx.HTTPError as exc:
             logger.warning("/listen fehlgeschlagen: %s", exc)
+            return {"speech": "Ich erreiche das Brain gerade nicht.", "text": ""}
+        except ValueError:
+            return {"speech": "Das Brain hat unverständlich geantwortet.", "text": ""}
+        return body if isinstance(body, dict) else {"speech": "", "text": ""}
+
+    async def confirm(self, token: str) -> dict:
+        """Ein "ja" auf eine Rueckfrage. Gleicher Fehlerpfad wie ``listen()``.
+
+        410 ist kein Fehler, sondern eine Antwort: die Rueckfrage ist aelter als
+        ``CONFIRM_TTL_SECONDS`` und das Brain hat sie vergessen. Wer eine Minute
+        spaeter "ja" sagt, soll das gesagt bekommen und nicht stumm bleiben.
+        """
+        try:
+            response = await self._client.post("/command", json={"confirm_token": token})
+            if response.status_code == 410:
+                return {"speech": "Die Rückfrage ist abgelaufen.", "text": ""}
+            if response.status_code == 401:
+                return {"speech": "Das Brain kennt mein Token nicht.", "text": ""}
+            response.raise_for_status()
+            body = response.json()
+        except httpx.HTTPError as exc:
+            logger.warning("/command (confirm) fehlgeschlagen: %s", exc)
             return {"speech": "Ich erreiche das Brain gerade nicht.", "text": ""}
         except ValueError:
             return {"speech": "Das Brain hat unverständlich geantwortet.", "text": ""}

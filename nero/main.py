@@ -1,11 +1,14 @@
 """Das Brain.
 
-Ein Ablauf, zwei Endpunkte:
+Ein Ablauf, mehrere Tueren dorthin:
 
-    /agent    WebSocket - Geraete melden sich an und warten auf Befehle
-    /listen   Audio -> Whisper -> Text -> (wie /command)
-    /command  Text -> Keyword-Router -> (falls nichts) LLM-Router -> Dispatcher -> Vorlage -> Satz
-    /speak    Satz -> Piper -> WAV
+    /agent      WebSocket - Geraete melden sich an und warten auf Befehle
+    /listen     Audio -> Whisper -> Text -> (wie /command)
+    /command    Text -> Keyword-Router -> (falls nichts) LLM-Router -> Dispatcher -> Vorlage -> Satz
+    /speak      Satz -> Piper -> WAV
+    /           Testseite, /spiegel und /dashboard die Anzeigen an der Wand
+    /health     lebt es? (offen, der Healthcheck braucht es)
+    /status     Betriebsdaten - hinter dem Geraetetoken, siehe dort
 
 Was hier bewusst NICHT passiert: das Ergebnis eines Tools wandert nie in einen
 weiteren Modellaufruf. Liest Nero spaeter einmal eine Notiz vor, in der
@@ -38,6 +41,7 @@ from fastapi.responses import HTMLResponse
 from nero.auth import bearer_token, parse_clients, require_client
 from nero.budget import DailyBudget
 from nero.clients.everything import EverythingClient
+from nero.clients.nextcloud import NextcloudClient
 from nero.config import Settings, get_settings
 from nero.devices import DeviceBus
 from nero.errors import NeroError
@@ -58,7 +62,9 @@ from nero.schemas import (
 )
 from nero.speech import normalize_for_speech
 from nero.stt.base import Transcriber, filename_for
+from nero.stt.chain import ChainTranscriber
 from nero.stt.groq import GroqTranscriber
+from nero.stt.local import LocalWhisper
 from nero.stt.null import NullStt
 from nero.tools import registry
 from nero.tools.base import ToolContext
@@ -109,19 +115,56 @@ def build_provider(settings: Settings, budget: DailyBudget) -> IntentProvider:
 
 
 def build_stt(settings: Settings, budget: DailyBudget) -> Transcriber:
+    """Das Ohr, gegebenenfalls als Kette: erst Groq, dann Whisper im Haus."""
+    kette: list[Transcriber] = []
+
     if settings.nero_stt_provider == "groq" and settings.groq_api_key:
-        return GroqTranscriber(
-            api_key=settings.groq_api_key,
-            model=settings.nero_stt_model,
-            base_url=settings.groq_base_url,
-            budget=budget,
-            language=settings.stt_language,
-            prompt=settings.stt_prompt,
-            timeout=settings.stt_timeout_seconds,
+        kette.append(
+            GroqTranscriber(
+                api_key=settings.groq_api_key,
+                model=settings.nero_stt_model,
+                base_url=settings.groq_base_url,
+                budget=budget,
+                language=settings.stt_language,
+                prompt=settings.stt_prompt,
+                timeout=settings.stt_timeout_seconds,
+            )
         )
-    if settings.nero_stt_provider == "groq":
-        logger.warning("GROQ_API_KEY fehlt - die Spracheingabe ist aus, /listen bleibt stumm.")
-    return NullStt()
+    elif settings.nero_stt_provider == "groq":
+        logger.warning("GROQ_API_KEY fehlt - es bleibt der lokale Weg, falls eingerichtet.")
+
+    if settings.nero_stt_fallback == "local":
+        kette.append(
+            LocalWhisper(
+                model=settings.nero_stt_local_model,
+                language=settings.stt_language,
+                prompt=settings.stt_prompt,
+                compute_type=settings.nero_stt_local_compute_type,
+                device=settings.nero_stt_local_device,
+            )
+        )
+
+    if not kette:
+        if settings.nero_stt_provider == "groq":
+            logger.warning("Die Spracheingabe ist aus, /listen bleibt stumm.")
+        return NullStt()
+    return kette[0] if len(kette) == 1 else ChainTranscriber(kette, budget)
+
+
+def build_notes(settings: Settings) -> NextcloudClient | None:
+    """Nextcloud ist optional. Ohne Zugangsdaten sagen die notes.*-Tools das."""
+    if not (settings.nextcloud_url and settings.nextcloud_user):
+        return None
+    if not settings.nextcloud_app_password:
+        logger.warning("NEXTCLOUD_APP_PASSWORD fehlt - die notes.*-Tools bleiben stumm.")
+        return None
+    return NextcloudClient(
+        base_url=settings.nextcloud_url,
+        user=settings.nextcloud_user,
+        app_password=settings.nextcloud_app_password,
+        notes_path=settings.nextcloud_notes_path,
+        timeout=settings.request_timeout_seconds,
+    )
 
 
 def build_tts(settings: Settings) -> SpeechSynthesizer:
@@ -162,12 +205,15 @@ async def lifespan(app: FastAPI):
             "NERO_CLIENT_TOKENS ist leer - jeder, der das Brain erreicht, darf es steuern."
         )
     app.state.devices = DeviceBus()
+    app.state.notes = build_notes(settings)
     app.state.pending = {}
     try:
         yield
     finally:
         app.state.devices.shutdown()
         await app.state.client.aclose()
+        if app.state.notes is not None:
+            await app.state.notes.aclose()
         await app.state.provider.aclose()
         await app.state.stt.aclose()
         await app.state.tts.aclose()
@@ -179,7 +225,25 @@ STATIC = Path(__file__).parent / "static"
 
 
 @app.get("/health")
-async def health() -> dict[str, object]:
+async def health() -> dict[str, str]:
+    """Lebt das Brain? Mehr nicht.
+
+    Der Endpunkt bleibt ohne Token erreichbar, weil der Docker-Healthcheck ihn
+    braucht - und ist ueber den Cloudflare-Tunnel damit oeffentlich. Deshalb
+    steht hier nichts drin: Geraetenamen, Anzahl der Clients und die heutigen
+    Ausgaben sind Betriebsdaten und gehen niemanden etwas an, der die Domain
+    kennt. Die stehen in /status, hinter dem Geraetetoken.
+    """
+    return {"status": "ok"}
+
+
+@app.get("/status", dependencies=[Depends(require_client)])
+async def status() -> dict[str, object]:
+    """Was /health frueher mitgeliefert hat - jetzt hinter der Schranke.
+
+    Getrennt statt ausgeduennt, damit hier spaeter mehr stehen darf, ohne dass
+    der Healthcheck alle 30 Sekunden teurer wird.
+    """
     return {
         "status": "ok",
         "provider": app.state.provider.name,
@@ -218,6 +282,23 @@ async def spiegel() -> HTMLResponse:
     return HTMLResponse((STATIC / "spiegel.html").read_text(encoding="utf-8"))
 
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard() -> HTMLResponse:
+    """Die Wand-Variante fuer ein Tablet statt fuer einen Spiegel.
+
+    Dieselbe Zusage wie beim Spiegel und derselbe Beweis dafuer: die Seite
+    spricht nur /command - auch beim Antippen. Ein Tippen auf eine Aufgabe
+    schickt genau den Satz, den man sonst sagen wuerde. Das Tablet kann damit
+    nichts, was die Stimme nicht auch kann, und es gibt keinen zweiten Weg in
+    die Everything App, der eigene Fehler machen koennte.
+
+    Der Unterschied zum Spiegel ist nur die Gestaltung: hinter halbdurchlaessigem
+    Glas leuchtet nur, was hell ist - auf einem Tablet gilt das nicht. Dort sind
+    Grautoene, Akzentfarben und mehr Informationsdichte wieder moeglich.
+    """
+    return HTMLResponse((STATIC / "dashboard.html").read_text(encoding="utf-8"))
+
+
 @app.websocket("/agent")
 async def agent(websocket: WebSocket) -> None:
     """Ein Geraet meldet sich an und wartet auf Befehle.
@@ -249,11 +330,7 @@ async def agent(websocket: WebSocket) -> None:
 
 @app.post("/command", response_model=CommandResponse, dependencies=[Depends(require_client)])
 async def command(request: CommandRequest) -> CommandResponse:
-    ctx = ToolContext(
-        client=app.state.client,
-        now=datetime.now(app.state.tz),
-        devices=app.state.devices,
-    )
+    ctx = _context()
 
     if request.confirm_token:
         return await _run(_take_pending(request.confirm_token, ctx.now), ctx, route="confirm")
@@ -277,11 +354,7 @@ async def listen(audio: Annotated[UploadFile, File()]) -> ListenResponse:
     will, schickt ihn an /speak. Das haelt Erkennung, Ausfuehrung und Stimme
     einzeln testbar - und ein Client, der nur mitlesen will, laedt kein WAV.
     """
-    ctx = ToolContext(
-        client=app.state.client,
-        now=datetime.now(app.state.tz),
-        devices=app.state.devices,
-    )
+    ctx = _context()
     settings = app.state.settings
 
     raw = await audio.read()
@@ -293,8 +366,9 @@ async def listen(audio: Annotated[UploadFile, File()]) -> ListenResponse:
             detail=f"Die Aufnahme ist zu groß (Grenze: {settings.max_audio_bytes} Bytes).",
         )
 
-    # Transkription kostet Geld, also vor dem Aufruf und nicht danach fragen.
-    if not app.state.budget.allows():
+    # Transkription kostet Geld, also vor dem Aufruf und nicht danach fragen -
+    # es sei denn, es gibt ein Ohr im Haus. Das kostet nichts und laeuft weiter.
+    if not app.state.budget.allows() and not getattr(app.state.stt, "free", False):
         return ListenResponse(speech="Ich habe heute mein Limit erreicht.", route="none")
 
     try:
@@ -339,6 +413,17 @@ async def speak(request: SpeakRequest) -> Response:
     return Response(content=wav, media_type="audio/wav")
 
 
+def _context() -> ToolContext:
+    """Alles, was ein Handler von aussen braucht - an einer Stelle zusammengebaut."""
+    return ToolContext(
+        client=app.state.client,
+        now=datetime.now(app.state.tz),
+        devices=app.state.devices,
+        notes=app.state.notes,
+        notes_max_sentences=app.state.settings.notes_max_sentences,
+    )
+
+
 async def _route_and_run(text: str, ctx: ToolContext) -> CommandResponse:
     """Der gemeinsame Kern von /command und /listen: Text -> Tool -> Satz."""
     call, route = keyword_route(text), "keyword"
@@ -361,27 +446,54 @@ async def _route_and_run(text: str, ctx: ToolContext) -> CommandResponse:
 
 async def _run(call: ToolCall, ctx: ToolContext, route: Route) -> CommandResponse:
     try:
-        tool, speech = await registry.dispatch(call, ctx)
+        tool, speech, items, follow_up = await registry.dispatch(call, ctx)
     except NeroError as exc:
         return CommandResponse(speech=exc.speech, tool=call.tool, route=route)
     except Exception:
         logger.exception("Tool %s ist gescheitert", call.tool)
         return CommandResponse(speech="Da ist etwas schiefgelaufen.", tool=call.tool, route=route)
-    return CommandResponse(speech=speech, tool=tool.name, route=route)
+
+    # Ist etwas offen geblieben ("Soll ich weiterlesen?"), wird die Fortsetzung
+    # hinterlegt statt ausgefuehrt - derselbe Weg wie bei einer Rueckfrage, und
+    # damit derselbe Client-Code, der seit A1 "ja" sagen kann.
+    token = _remember(follow_up, ctx.now) if follow_up else None
+    return CommandResponse(
+        speech=speech,
+        tool=tool.name,
+        route=route,
+        items=items,
+        needs_confirmation=token is not None,
+        confirm_token=token,
+    )
 
 
 def _ask_confirmation(tool, call: ToolCall, now: datetime) -> CommandResponse:
     """Destruktive Tools fragen zurueck, bevor sie etwas anfassen."""
-    token = secrets.token_urlsafe(12)
-    ttl = app.state.settings.confirm_ttl_seconds
-    app.state.pending[token] = Pending(call=call, expires_at=now.timestamp() + ttl)
     return CommandResponse(
         speech=tool.confirm_question(call.args),
         tool=tool.name,
         route="confirm",
         needs_confirmation=True,
-        confirm_token=token,
+        confirm_token=_remember(call, now),
     )
+
+
+def _remember(call: ToolCall, now: datetime) -> str:
+    """Einen Aufruf fuer ein spaeteres "ja" hinterlegen.
+
+    Was passiert, steht damit fest, bevor jemand zustimmt - und es verfaellt von
+    selbst. Wer nicht antwortet, laesst einen Eintrag liegen: abgeholt wird nur,
+    was bestaetigt wird. Bei einem Prozess, der monatelang laeuft, waere das ein
+    langsames Leck, also wird hier, wo ohnehin geschrieben wird, mit ausgemistet.
+    """
+    now_ts = now.timestamp()
+    app.state.pending = {t: p for t, p in app.state.pending.items() if p.expires_at >= now_ts}
+
+    token = secrets.token_urlsafe(12)
+    app.state.pending[token] = Pending(
+        call=call, expires_at=now_ts + app.state.settings.confirm_ttl_seconds
+    )
+    return token
 
 
 def _take_pending(token: str, now: datetime) -> ToolCall:

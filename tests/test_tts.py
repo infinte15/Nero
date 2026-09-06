@@ -261,5 +261,5 @@ def test_speak_ohne_text_ist_400(api):
     assert api.post("/speak", json={"text": "a" * 1001}).status_code == 422
 
 
-def test_health_meldet_die_sprachausgabe(api):
-    assert api.get("/health").json()["tts"] == "null"
+def test_status_meldet_die_sprachausgabe(api):
+    assert api.get("/status").json()["tts"] == "null"

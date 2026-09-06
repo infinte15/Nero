@@ -4,6 +4,9 @@
 #
 #   ./scripts/smoke.sh [BRAIN_URL]
 #
+# Sind Geraetetokens gesetzt, gehoert eines davon in die Umgebung:
+#   NERO_DEVICE_TOKEN=... ./scripts/smoke.sh https://nero.deine-domain.de
+#
 # Fertig ist Phase 1, wenn alle elf die richtige Aktion ausloesen und die als
 # [K] markierten ueber den Keyword-Router laufen - also ohne dass ein Paket das
 # Haus verlaesst.
@@ -20,20 +23,30 @@ if ! curl -sf "$BRAIN/health" >/dev/null; then
   echo "  .venv/bin/uvicorn nero.main:app --port 8090"
   exit 1
 fi
-HEALTH=$(curl -sf "$BRAIN/health")
-echo "Brain: $HEALTH"
+echo "Brain: $(curl -sf "$BRAIN/health")"
 echo
 
-exec python3 - "$BRAIN" <<'PY'
+exec python3 - "$BRAIN" "${NERO_DEVICE_TOKEN:-}" <<'PY'
 import json
 import sys
 import urllib.error
 import urllib.request
 
-BRAIN = sys.argv[1]
+BRAIN, TOKEN = sys.argv[1], sys.argv[2]
+HEADERS = {"Content-Type": "application/json"}
+if TOKEN:
+    HEADERS["Authorization"] = f"Bearer {TOKEN}"
 
-with urllib.request.urlopen(f"{BRAIN}/health", timeout=10) as response:
-    LLM_ENABLED = json.load(response)["provider"] != "null"
+# Steht in /health nicht mehr drin: der Endpunkt ist ueber den Tunnel oeffentlich.
+# Ohne Token laesst sich das nicht nachsehen - dann wird angenommen, dass Stufe 2
+# laeuft, damit ein echter Fehlschlag nicht als "uebersprungen" durchgeht.
+try:
+    request = urllib.request.Request(f"{BRAIN}/status", headers=HEADERS)
+    with urllib.request.urlopen(request, timeout=10) as response:
+        LLM_ENABLED = json.load(response)["provider"] != "null"
+except (urllib.error.URLError, TimeoutError, KeyError):
+    print("/status nicht lesbar (NERO_DEVICE_TOKEN setzen) - Stufe 2 wird als aktiv angenommen.\n")
+    LLM_ENABLED = True
 
 COMMANDS = [
     "Wie spät ist es?",
@@ -61,7 +74,7 @@ for text in COMMANDS:
     request = urllib.request.Request(
         f"{BRAIN}/command",
         data=json.dumps({"text": text}).encode(),
-        headers={"Content-Type": "application/json"},
+        headers=HEADERS,
     )
     try:
         with urllib.request.urlopen(request, timeout=20) as response:

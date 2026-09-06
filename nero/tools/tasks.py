@@ -79,6 +79,21 @@ def _speak_open(tasks: list[dict[str, Any]], _ctx: ToolContext) -> str:
     return sentence + "."
 
 
+def _view_open(tasks: list[dict[str, Any]], ctx: ToolContext) -> list[dict[str, Any]]:
+    """Alle offenen Aufgaben. Der Satz nennt drei, die Liste zeigt alle."""
+    zeilen = []
+    for task in tasks:
+        deadline = from_app(task.get("deadline"))
+        zeilen.append(
+            {
+                "label": task.get("title") or "ohne Titel",
+                "meta": fmt_day_relative(deadline, ctx.now.date()) if deadline else None,
+                "done": False,
+            }
+        )
+    return zeilen
+
+
 async def _complete_task(ctx: ToolContext, title: str) -> dict[str, Any]:
     tasks = await _open_tasks(ctx)
     task = pick(title, tasks, key="title", kind="Aufgabe")
@@ -108,6 +123,7 @@ TOOLS = [
         description="Die offenen Aufgaben vorlesen",
         handler=_open_tasks,
         speak=_speak_open,
+        view=_view_open,
     ),
     Tool(
         name="app.complete_task",

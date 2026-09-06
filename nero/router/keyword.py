@@ -56,6 +56,15 @@ PATTERNS: list[tuple] = [
     # Kennt der Agent das Programm nicht, sagt er das - er hat eine Positivliste.
     (r"^(?:öffne|starte) (?:mir )?(?:das programm |die app )?(.+)$", "device.open_app", ("app",)),
     (r"^welche ger(?:ä|ae)te sind (?:verbunden|online)$", "device.list", ()),
+    # --- Notizen ---
+    # Vor "öffne/starte", damit "lies mir die Notiz Einkauf vor" nicht als
+    # Programmname endet - und vor der Suche, weil "Notizen" dort weiter greift.
+    (r"^lies (?:mir )?(?:die )?notiz (.+?)(?: vor)?$", "notes.read", ("title",)),
+    (r"^was steht in (?:der )?notiz (.+?)(?: drin)?$", "notes.read", ("title",)),
+    (r"^(?:such|suche|finde) (?:mir )?(?:die )?notizen? (?:zu |über |ueber |nach )?(.+)$",
+     "notes.search", ("query",)),
+    (r"^(?:welche )?notizen(?: (?:hab ich|habe ich))?(?: (?:zu|über|ueber) (.+))?$",
+     "notes.search", ("query",)),
     # --- Lernen ---
     (r"^wie (?:steht'?s|läuft es|lauft es) (?:mit )?(?:dem )?lernen$", "app.study_progress", ()),
     (r"^(?:mein )?lernfortschritt(?: in| für)? ?(.*)$", "app.study_progress", ("subject",)),

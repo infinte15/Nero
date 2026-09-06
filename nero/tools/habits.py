@@ -60,6 +60,19 @@ def _speak_today(habits: list[dict[str, Any]], ctx: ToolContext) -> str:
     return sentence
 
 
+def _view_today(habits: list[dict[str, Any]], ctx: ToolContext) -> list[dict[str, Any]]:
+    """Mit Haekchen: was heute schon abgehakt ist, steht in ``completedDates``."""
+    today = ctx.now.date().isoformat()
+    return [
+        {
+            "label": habit.get("name") or "ohne Namen",
+            "meta": None,
+            "done": today in (habit.get("completedDates") or []),
+        }
+        for habit in habits
+    ]
+
+
 async def _complete_habit(ctx: ToolContext, name: str) -> dict[str, Any]:
     habits = await _all_habits(ctx)
     habit = pick(name, habits, key="name", kind="Gewohnheit")
@@ -95,6 +108,7 @@ TOOLS = [
         description="Die Gewohnheiten für heute vorlesen und sagen, was noch offen ist",
         handler=_habits_today,
         speak=_speak_today,
+        view=_view_today,
     ),
     Tool(
         name="app.complete_habit",
